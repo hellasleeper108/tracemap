@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Network Trace Map</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  background: #0d1117;
+  color: #c9d1d9;
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+}
+#map { flex: 1; }
+#sidebar {
+  width: 300px;
+  background: #161b22;
+  border-left: 1px solid #30363d;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+#header {
+  padding: 14px 16px 12px;
+  border-bottom: 1px solid #30363d;
+  flex-shrink: 0;
+}
+#header h1 {
+  font-size: 11px;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  color: #58a6ff;
+  margin-bottom: 4px;
+}
+#stats { font-size: 11px; color: #8b949e; }
+#host-info {
+  padding: 10px 16px;
+  border-bottom: 1px solid #30363d;
+  font-size: 11px;
+  color: #8b949e;
+  flex-shrink: 0;
+}
+#host-info .label { color: #3fb950; font-weight: bold; }
+#conn-list { flex: 1; overflow-y: auto; }
+.conn {
+  padding: 9px 16px;
+  border-bottom: 1px solid #1c2128;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.conn:hover { background: #1c2128; }
+.conn .ip   { font-size: 12px; color: #79c0ff; font-weight: bold; }
+.conn .loc  { font-size: 11px; color: #8b949e; margin-top: 2px; }
+.conn .proc { font-size: 10px; color: #3fb950; margin-top: 2px; }
+.conn .org  { font-size: 10px; color: #d2a8ff; margin-top: 1px;
+              white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#footer {
+  padding: 8px 16px;
+  border-top: 1px solid #30363d;
+  font-size: 10px;
+  color: #484f58;
+  flex-shrink: 0;
+}
+::-webkit-scrollbar { width: 3px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #30363d; border-radius: 2px; }
+
+/* Leaflet popup dark theme */
+.leaflet-popup-content-wrapper {
+  background: #161b22;
+  color: #c9d1d9;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: 12px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.6);
+}
+.leaflet-popup-tip { background: #161b22; }
+.leaflet-popup-content b { color: #58a6ff; }
+.leaflet-popup-close-button { color: #8b949e !important; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div id="sidebar">
+  <div id="header">
+    <h1>Network Trace Map</h1>
+    <div id="stats">Connecting&hellip;</div>
+  </div>
+  <div id="host-info"><span class="label">HOST</span> &mdash; loading&hellip;</div>
+  <div id="conn-list"></div>
+  <div id="footer">Refreshes every 5s &bull; ip-api.com geolocation</div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const map = L.map('map', { center: [20, 0], zoom: 2, zoomControl: true, attributionControl: false });
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { maxZoom: 19 }).addTo(map);
+
+const hostIcon = L.divIcon({
+  className: '',
+  html: '<div style="width:14px;height:14px;background:#3fb950;border:2px solid #fff;border-radius:50%;box-shadow:0 0 8px #3fb950;"></div>',
+  iconSize: [14, 14], iconAnchor: [7, 7]
+});
+
+const peerIcon = (color='#ff7b72') => L.divIcon({
+  className: '',
+  html: `<div style="width:10px;height:10px;background:${color};border:1px solid rgba(255,255,255,0.4);border-radius:50%;box-shadow:0 0 6px ${color};"></div>`,
+  iconSize: [10, 10], iconAnchor: [5, 5]
+});
+
+let hostMarker = null, hostLatLng = null;
+let peerMarkers = {};
+let arcLines = [];
+
+function gcArc(from, to, steps=60) {
+  const pts = [];
+  const dist  = Math.hypot(to[0]-from[0], to[1]-from[1]);
+  const bulge = Math.min(dist * 0.25, 30);
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    pts.push([
+      from[0] + (to[0]-from[0])*t + bulge * Math.sin(Math.PI*t),
+      from[1] + (to[1]-from[1])*t,
+    ]);
+  }
+  return pts;
+}
+
+function popupHtml(c) {
+  return `<b>${c.ip}</b><br>
+    <span style="color:#8b949e">:${c.port}</span><br>
+    ${c.city ? c.city + ', ' : ''}${c.country || '?'}<br>
+    ${c.org || c.isp || ''}
+    ${c.process ? '<br><span style="color:#3fb950">⚙ ' + c.process + '</span>' : ''}`;
+}
+
+async function refresh() {
+  let data;
+  try {
+    const r = await fetch('/api/connections');
+    data = await r.json();
+  } catch(e) { return; }
+
+  if (data.host && data.host.lat && !hostMarker) {
+    hostLatLng = [data.host.lat, data.host.lon];
+    hostMarker = L.marker(hostLatLng, { icon: hostIcon, zIndexOffset: 1000 })
+      .addTo(map)
+      .bindPopup(`<b>YOU</b><br>${data.host.query}<br>${data.host.city}, ${data.host.country}`);
+    document.getElementById('host-info').innerHTML =
+      `<span class="label">HOST</span> &mdash; ${data.host.query} &mdash; ${data.host.city}, ${data.host.country}`;
+  }
+
+  arcLines.forEach(l => map.removeLayer(l));
+  arcLines = [];
+
+  const seen = new Set();
+  const list = document.getElementById('conn-list');
+  list.innerHTML = '';
+
+  const procColors = {};
+  const palette = ['#ff7b72','#ffa657','#d2a8ff','#79c0ff','#56d364','#f0883e'];
+  let colorIdx = 0;
+  function colorFor(proc) {
+    if (!proc) return '#ff7b72';
+    if (!procColors[proc]) procColors[proc] = palette[colorIdx++ % palette.length];
+    return procColors[proc];
+  }
+
+  data.connections.forEach(c => {
+    seen.add(c.ip);
+    const color = colorFor(c.process);
+
+    if (!peerMarkers[c.ip]) {
+      peerMarkers[c.ip] = L.marker([c.lat, c.lon], { icon: peerIcon(color) }).addTo(map);
+    }
+    peerMarkers[c.ip].setPopupContent(popupHtml(c));
+    if (!peerMarkers[c.ip].getPopup()) peerMarkers[c.ip].bindPopup(popupHtml(c));
+
+    if (hostLatLng) {
+      const line = L.polyline(gcArc(hostLatLng, [c.lat, c.lon]),
+        { color, weight: 1.2, opacity: 0.5, dashArray: '5,5' }).addTo(map);
+      arcLines.push(line);
+    }
+
+    const row = document.createElement('div');
+    row.className = 'conn';
+    row.innerHTML = `
+      <div class="ip" style="color:${color}">${c.ip}<span style="color:#484f58">:${c.port}</span></div>
+      <div class="loc">${c.city ? c.city + ', ' : ''}${c.country || '?'} (${c.countryCode || '?'})</div>
+      ${c.process ? `<div class="proc">⚙ ${c.process}</div>` : ''}
+      ${c.org ? `<div class="org">🏢 ${c.org}</div>` : ''}
+    `;
+    row.onclick = () => { map.setView([c.lat, c.lon], 5); peerMarkers[c.ip].openPopup(); };
+    list.appendChild(row);
+  });
+
+  Object.keys(peerMarkers).forEach(ip => {
+    if (!seen.has(ip)) { map.removeLayer(peerMarkers[ip]); delete peerMarkers[ip]; }
+  });
+
+  const t = new Date(data.last_updated * 1000);
+  document.getElementById('stats').textContent =
+    `${data.connections.length} connection${data.connections.length !== 1 ? 's' : ''} · ${t.toLocaleTimeString()}`;
+}
+
+refresh();
+setInterval(refresh, 5000);
+</script>
+</body>
+</html>
