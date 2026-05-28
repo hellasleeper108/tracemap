@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-netmap.py — Live network connection visualizer on a world map.
-Run with: python3 netmap.py
+tracemap.py — Live network connection visualizer on a world map.
+Run with: python3 tracemap.py
 Then open http://localhost:9999 in a browser.
 """
 
