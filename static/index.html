@@ -52,11 +52,38 @@ body {
   transition: background 0.15s;
 }
 .conn:hover { background: #1c2128; }
-.conn .ip   { font-size: 12px; color: #79c0ff; font-weight: bold; }
+.conn.threat-high  { border-left: 2px solid #f85149; }
+.conn.threat-med   { border-left: 2px solid #f0883e; }
+.conn.threat-low   { border-left: 2px solid #e3b341; }
+.conn .ip   { font-size: 12px; font-weight: bold; }
 .conn .loc  { font-size: 11px; color: #8b949e; margin-top: 2px; }
 .conn .proc { font-size: 10px; color: #3fb950; margin-top: 2px; }
 .conn .org  { font-size: 10px; color: #d2a8ff; margin-top: 1px;
               white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.conn .threat-badge {
+  display: inline-block;
+  font-size: 10px;
+  margin-top: 3px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-weight: bold;
+}
+.badge-high { background: rgba(248,81,73,0.15);  color: #f85149; }
+.badge-med  { background: rgba(240,136,62,0.15); color: #f0883e; }
+.badge-low  { background: rgba(227,179,65,0.15); color: #e3b341; }
+#threat-legend {
+  padding: 8px 16px;
+  border-top: 1px solid #30363d;
+  font-size: 10px;
+  color: #484f58;
+  flex-shrink: 0;
+  display: none;
+}
+#threat-legend.visible { display: block; }
+#threat-legend .row { display: flex; align-items: center; gap: 6px; margin-bottom: 2px; }
+#threat-legend .dot {
+  width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+}
 #footer {
   padding: 8px 16px;
   border-top: 1px solid #30363d;
@@ -68,7 +95,6 @@ body {
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: #30363d; border-radius: 2px; }
 
-/* Leaflet popup dark theme */
 .leaflet-popup-content-wrapper {
   background: #161b22;
   color: #c9d1d9;
@@ -92,7 +118,12 @@ body {
   </div>
   <div id="host-info"><span class="label">HOST</span> &mdash; loading&hellip;</div>
   <div id="conn-list"></div>
-  <div id="footer">Refreshes every 5s &bull; ip-api.com geolocation</div>
+  <div id="threat-legend">
+    <div class="row"><div class="dot" style="background:#f85149;box-shadow:0 0 4px #f85149"></div> Malicious (score &ge;75)</div>
+    <div class="row"><div class="dot" style="background:#f0883e"></div> Suspicious (score 25&ndash;74)</div>
+    <div class="row"><div class="dot" style="background:#e3b341"></div> Low risk (score 1&ndash;24)</div>
+  </div>
+  <div id="footer">Refreshes every 5s &bull; ip-api.com &bull; abuseipdb.com</div>
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -100,21 +131,68 @@ body {
 const map = L.map('map', { center: [20, 0], zoom: 2, zoomControl: true, attributionControl: false });
 L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { maxZoom: 19 }).addTo(map);
 
+// ── Icon builders ─────────────────────────────────────────────────────────────
+
 const hostIcon = L.divIcon({
   className: '',
   html: '<div style="width:14px;height:14px;background:#3fb950;border:2px solid #fff;border-radius:50%;box-shadow:0 0 8px #3fb950;"></div>',
   iconSize: [14, 14], iconAnchor: [7, 7]
 });
 
-const peerIcon = (color='#ff7b72') => L.divIcon({
-  className: '',
-  html: `<div style="width:10px;height:10px;background:${color};border:1px solid rgba(255,255,255,0.4);border-radius:50%;box-shadow:0 0 6px ${color};"></div>`,
-  iconSize: [10, 10], iconAnchor: [5, 5]
-});
+function peerIcon(color, threatLevel) {
+  let extra = '';
+  if      (threatLevel === 'high') extra = `box-shadow:0 0 0 4px rgba(248,81,73,0.25),0 0 10px #f85149;`;
+  else if (threatLevel === 'med')  extra = `box-shadow:0 0 0 3px rgba(240,136,62,0.2),0 0 8px #f0883e;`;
+  else                             extra = `box-shadow:0 0 6px ${color};`;
+  return L.divIcon({
+    className: '',
+    html: `<div style="width:10px;height:10px;background:${color};border:1px solid rgba(255,255,255,0.4);border-radius:50%;${extra}"></div>`,
+    iconSize: [10, 10], iconAnchor: [5, 5]
+  });
+}
+
+// ── Threat helpers ────────────────────────────────────────────────────────────
+
+function threatLevel(score) {
+  if (score === null || score === undefined) return null;
+  if (score >= 75) return 'high';
+  if (score >= 25) return 'med';
+  if (score >= 1)  return 'low';
+  return null;
+}
+
+function threatLabel(score, reports) {
+  const lvl = threatLevel(score);
+  if (!lvl) return '';
+  const icons  = { high: '☠', med: '⚠', low: '⚠' };
+  const labels = { high: 'Malicious', med: 'Suspicious', low: 'Low risk' };
+  return `<span class="threat-badge badge-${lvl}">${icons[lvl]} ${labels[lvl]} · score ${score} · ${reports} report${reports !== 1 ? 's' : ''}</span>`;
+}
+
+function markerColor(processName, score) {
+  const lvl = threatLevel(score);
+  if (lvl === 'high') return '#f85149';
+  if (lvl === 'med')  return '#f0883e';
+  // process-based palette for clean IPs
+  return procColor(processName);
+}
+
+// ── State ─────────────────────────────────────────────────────────────────────
 
 let hostMarker = null, hostLatLng = null;
 let peerMarkers = {};
 let arcLines = [];
+const procColors = {};
+const palette = ['#79c0ff','#56d364','#d2a8ff','#ffa657','#39d353','#58a6ff'];
+let colorIdx = 0;
+
+function procColor(proc) {
+  if (!proc) return '#6e7681';
+  if (!procColors[proc]) procColors[proc] = palette[colorIdx++ % palette.length];
+  return procColors[proc];
+}
+
+// ── Arc drawing ───────────────────────────────────────────────────────────────
 
 function gcArc(from, to, steps=60) {
   const pts = [];
@@ -130,13 +208,21 @@ function gcArc(from, to, steps=60) {
   return pts;
 }
 
+// ── Popup content ─────────────────────────────────────────────────────────────
+
 function popupHtml(c) {
+  const lvl   = threatLevel(c.abuse_score);
+  const tline = lvl ? `<br><span style="color:${lvl==='high'?'#f85149':lvl==='med'?'#f0883e':'#e3b341'}">
+    ${lvl==='high'?'☠':'⚠'} AbuseIPDB: ${c.abuse_score}/100 (${c.threat_reports} reports)</span>` : '';
   return `<b>${c.ip}</b><br>
     <span style="color:#8b949e">:${c.port}</span><br>
     ${c.city ? c.city + ', ' : ''}${c.country || '?'}<br>
     ${c.org || c.isp || ''}
-    ${c.process ? '<br><span style="color:#3fb950">⚙ ' + c.process + '</span>' : ''}`;
+    ${c.process ? '<br><span style="color:#3fb950">⚙ ' + c.process + '</span>' : ''}
+    ${tline}`;
 }
+
+// ── Main refresh loop ─────────────────────────────────────────────────────────
 
 async function refresh() {
   let data;
@@ -145,6 +231,10 @@ async function refresh() {
     data = await r.json();
   } catch(e) { return; }
 
+  // Show threat legend if threat intel is active
+  document.getElementById('threat-legend').classList.toggle('visible', !!data.threat_enabled);
+
+  // Host marker (once)
   if (data.host && data.host.lat && !hostMarker) {
     hostLatLng = [data.host.lat, data.host.lon];
     hostMarker = L.marker(hostLatLng, { icon: hostIcon, zIndexOffset: 1000 })
@@ -154,6 +244,7 @@ async function refresh() {
       `<span class="label">HOST</span> &mdash; ${data.host.query} &mdash; ${data.host.city}, ${data.host.country}`;
   }
 
+  // Clear arcs
   arcLines.forEach(l => map.removeLayer(l));
   arcLines = [];
 
@@ -161,43 +252,46 @@ async function refresh() {
   const list = document.getElementById('conn-list');
   list.innerHTML = '';
 
-  const procColors = {};
-  const palette = ['#ff7b72','#ffa657','#d2a8ff','#79c0ff','#56d364','#f0883e'];
-  let colorIdx = 0;
-  function colorFor(proc) {
-    if (!proc) return '#ff7b72';
-    if (!procColors[proc]) procColors[proc] = palette[colorIdx++ % palette.length];
-    return procColors[proc];
-  }
-
   data.connections.forEach(c => {
     seen.add(c.ip);
-    const color = colorFor(c.process);
+    const score = c.abuse_score ?? null;
+    const lvl   = threatLevel(score);
+    const color = markerColor(c.process, score);
 
+    // Map marker
+    const icon = peerIcon(color, lvl);
     if (!peerMarkers[c.ip]) {
-      peerMarkers[c.ip] = L.marker([c.lat, c.lon], { icon: peerIcon(color) }).addTo(map);
+      peerMarkers[c.ip] = L.marker([c.lat, c.lon], { icon }).addTo(map);
+    } else {
+      peerMarkers[c.ip].setIcon(icon);
     }
-    peerMarkers[c.ip].setPopupContent(popupHtml(c));
-    if (!peerMarkers[c.ip].getPopup()) peerMarkers[c.ip].bindPopup(popupHtml(c));
+    peerMarkers[c.ip].bindPopup(popupHtml(c));
 
+    // Arc
     if (hostLatLng) {
+      const arcColor = lvl === 'high' ? '#f85149' : lvl === 'med' ? '#f0883e' : color;
+      const opacity  = lvl === 'high' ? 0.7 : 0.45;
       const line = L.polyline(gcArc(hostLatLng, [c.lat, c.lon]),
-        { color, weight: 1.2, opacity: 0.5, dashArray: '5,5' }).addTo(map);
+        { color: arcColor, weight: lvl === 'high' ? 1.6 : 1.2, opacity, dashArray: lvl === 'high' ? '6,3' : '5,5' }
+      ).addTo(map);
       arcLines.push(line);
     }
 
+    // Sidebar row
     const row = document.createElement('div');
-    row.className = 'conn';
+    row.className = 'conn' + (lvl ? ` threat-${lvl}` : '');
     row.innerHTML = `
       <div class="ip" style="color:${color}">${c.ip}<span style="color:#484f58">:${c.port}</span></div>
       <div class="loc">${c.city ? c.city + ', ' : ''}${c.country || '?'} (${c.countryCode || '?'})</div>
       ${c.process ? `<div class="proc">⚙ ${c.process}</div>` : ''}
       ${c.org ? `<div class="org">🏢 ${c.org}</div>` : ''}
+      ${score !== null ? `<div>${threatLabel(score, c.threat_reports ?? 0)}</div>` : ''}
     `;
     row.onclick = () => { map.setView([c.lat, c.lon], 5); peerMarkers[c.ip].openPopup(); };
     list.appendChild(row);
   });
 
+  // Prune stale markers
   Object.keys(peerMarkers).forEach(ip => {
     if (!seen.has(ip)) { map.removeLayer(peerMarkers[ip]); delete peerMarkers[ip]; }
   });

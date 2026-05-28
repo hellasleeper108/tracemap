@@ -7,6 +7,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 import collector
 import db
+import threat
 
 PORT       = 9999
 STATIC_DIR = Path(__file__).parent / "static"
@@ -30,6 +31,10 @@ class _Handler(BaseHTTPRequestHandler):
             rows = db.get_history(ip)
             first = db.get_first_seen(ip)
             self._json({"ip": ip, "first_seen": first, "events": rows})
+
+        elif path.startswith("/api/threat/"):
+            ip = path.removeprefix("/api/threat/")
+            self._json(db.get_threat(ip) or {})
 
         else:
             self.send_response(404)

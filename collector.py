@@ -10,6 +10,7 @@ import threading
 import time
 import db
 import geo
+import threat
 
 REFRESH_INTERVAL = 5  # seconds
 
@@ -99,9 +100,10 @@ def get_state() -> dict:
     """Thread-safe snapshot of current state for the server to return."""
     with _lock:
         return {
-            "host":         dict(_host_geo),
-            "connections":  list(_connections),
-            "last_updated": _last_updated,
+            "host":           dict(_host_geo),
+            "connections":    list(_connections),
+            "last_updated":   _last_updated,
+            "threat_enabled": threat.is_enabled(),
         }
 
 
@@ -127,7 +129,12 @@ def updater_loop():
         for c in conns:
             g = geo_data.get(c["ip"])
             if g:
-                enriched.append({**c, **g})
+                entry = {**c, **g}
+                t = db.get_threat(c["ip"])
+                if t:
+                    entry["abuse_score"] = t["abuse_score"]
+                    entry["threat_reports"] = t["reports"]
+                enriched.append(entry)
 
         with _lock:
             _connections  = enriched

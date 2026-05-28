@@ -120,3 +120,36 @@ def get_first_seen(ip: str) -> int | None:
             "SELECT MIN(seen_at) AS t FROM connections_log WHERE ip = ?", (ip,)
         ).fetchone()
         return row["t"] if row else None
+
+
+# ── threat_cache ───────────────────────────────────────────────────────────────
+
+def get_threat(ip: str) -> dict | None:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM threat_cache WHERE ip = ?", (ip,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def set_threat(ip: str, data: dict):
+    with _connect() as conn:
+        conn.execute("""
+            INSERT OR REPLACE INTO threat_cache (ip, abuse_score, reports, checked_at)
+            VALUES (?, ?, ?, ?)
+        """, (ip, data.get("abuse_score", 0), data.get("reports", 0), int(time.time())))
+
+
+def get_ips_needing_threat_check(ttl: int, limit: int = 50) -> list[str]:
+    """IPs seen in connections_log that have no threat record or a stale one."""
+    cutoff = int(time.time()) - ttl
+    with _connect() as conn:
+        rows = conn.execute("""
+            SELECT DISTINCT cl.ip
+            FROM connections_log cl
+            LEFT JOIN threat_cache tc ON cl.ip = tc.ip
+            WHERE tc.ip IS NULL OR tc.checked_at < ?
+            ORDER BY cl.seen_at DESC
+            LIMIT ?
+        """, (cutoff, limit)).fetchall()
+        return [r["ip"] for r in rows]

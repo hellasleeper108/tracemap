@@ -9,6 +9,7 @@ import time
 import webbrowser
 import db
 import collector
+import threat
 import server
 
 
@@ -17,6 +18,7 @@ def main():
 
     print("[tracemap] Starting…")
     threading.Thread(target=collector.updater_loop, daemon=True).start()
+    threading.Thread(target=threat.checker_loop,   daemon=True).start()
     time.sleep(2)
 
     url = f"http://localhost:{server.PORT}"
