@@ -8,6 +8,7 @@ from pathlib import Path
 import collector
 import db
 import threat
+import traceroute as tr
 
 PORT       = 9999
 STATIC_DIR = Path(__file__).parent / "static"
@@ -36,6 +37,20 @@ class _Handler(BaseHTTPRequestHandler):
             ip = path.removeprefix("/api/threat/")
             self._json(db.get_threat(ip) or {})
 
+        elif path.startswith("/api/traceroute/"):
+            ip = path.removeprefix("/api/traceroute/")
+            self._json(tr.get_result(ip))
+
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def do_POST(self):
+        path = self.path.split("?")[0]
+        if path.startswith("/api/traceroute/"):
+            ip     = path.removeprefix("/api/traceroute/")
+            status = tr.start(ip)
+            self._json({"status": status})
         else:
             self.send_response(404)
             self.end_headers()

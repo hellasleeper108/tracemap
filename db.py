@@ -3,6 +3,7 @@ db.py — SQLite schema and all query functions.
 Database lives at ~/.local/share/tracemap/tracemap.db
 """
 
+import json
 import sqlite3
 import time
 from pathlib import Path
@@ -153,3 +154,27 @@ def get_ips_needing_threat_check(ttl: int, limit: int = 50) -> list[str]:
             LIMIT ?
         """, (cutoff, limit)).fetchall()
         return [r["ip"] for r in rows]
+
+
+# ── traceroutes ────────────────────────────────────────────────────────────────
+
+def store_traceroute(ip: str, hops: list[dict]):
+    with _connect() as conn:
+        conn.execute("""
+            INSERT OR REPLACE INTO traceroutes (target_ip, ran_at, hops)
+            VALUES (?, ?, ?)
+        """, (ip, int(time.time()), json.dumps(hops)))
+
+
+def get_traceroute(ip: str) -> dict | None:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM traceroutes WHERE target_ip = ? ORDER BY ran_at DESC LIMIT 1", (ip,)
+        ).fetchone()
+        if not row:
+            return None
+        return {
+            "ip":     row["target_ip"],
+            "ran_at": row["ran_at"],
+            "hops":   json.loads(row["hops"]),
+        }
