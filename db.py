@@ -160,8 +160,9 @@ def get_ips_needing_threat_check(ttl: int, limit: int = 50) -> list[str]:
 
 def store_traceroute(ip: str, hops: list[dict]):
     with _connect() as conn:
+        conn.execute("DELETE FROM traceroutes WHERE target_ip = ?", (ip,))
         conn.execute("""
-            INSERT OR REPLACE INTO traceroutes (target_ip, ran_at, hops)
+            INSERT INTO traceroutes (target_ip, ran_at, hops)
             VALUES (?, ?, ?)
         """, (ip, int(time.time()), json.dumps(hops)))
 
