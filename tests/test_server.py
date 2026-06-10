@@ -73,6 +73,17 @@ class TestServerRouting(unittest.TestCase):
         conn.close()
         return resp.status, body
 
+    def _request(self, method, path, body=None):
+        conn = http.client.HTTPConnection("localhost", TEST_PORT, timeout=5)
+        headers = {'Content-Type': 'application/json'} if body is not None else {}
+        conn.request(method, path,
+                     body=json.dumps(body).encode() if body is not None else None,
+                     headers=headers)
+        resp = conn.getresponse()
+        data = resp.read()
+        conn.close()
+        return resp.status, data
+
     # ── HTML routes ───────────────────────────────────────────────────────────
 
     def test_root_returns_200(self):
@@ -279,3 +290,133 @@ class TestServerRouting(unittest.TestCase):
         data = json.loads(body)
         self.assertEqual(data["threat_summary"]["malicious"],  1)
         self.assertEqual(data["threat_summary"]["suspicious"], 1)
+
+    def test_stats_has_tor_vpn_count(self):
+        _, _, body = self._get("/api/stats")
+        data = json.loads(body)
+        self.assertIn("tor_count", data)
+        self.assertIn("vpn_count", data)
+
+    # ── /api/history/timeline ─────────────────────────────────────────────────
+
+    def test_timeline_status_200(self):
+        status, _ = self._request("GET", "/api/history/timeline")
+        self.assertEqual(status, 200)
+
+    def test_timeline_returns_list(self):
+        _, body = self._request("GET", "/api/history/timeline")
+        data = json.loads(body)
+        self.assertIsInstance(data, list)
+
+    def test_timeline_window_param(self):
+        status, _ = self._request("GET", "/api/history/timeline?window=6")
+        self.assertEqual(status, 200)
+
+    # ── /api/connections/at/<ts> ──────────────────────────────────────────────
+
+    def test_connections_at_status_200(self):
+        status, _ = self._request("GET", "/api/connections/at/0")
+        self.assertEqual(status, 200)
+
+    def test_connections_at_invalid_ts_returns_400(self):
+        status, _ = self._request("GET", "/api/connections/at/notanumber")
+        self.assertEqual(status, 400)
+
+    # ── /api/alerts/rules ─────────────────────────────────────────────────────
+
+    def test_alerts_rules_get_empty(self):
+        status, body = self._request("GET", "/api/alerts/rules")
+        self.assertEqual(status, 200)
+        data = json.loads(body)
+        self.assertIsInstance(data, list)
+
+    def test_alerts_rules_post_creates_rule(self):
+        status, body = self._request(
+            "POST", "/api/alerts/rules",
+            body={"rule_type": "new_ip", "condition": {}, "action": {"type": "desktop"}}
+        )
+        self.assertEqual(status, 200)
+        data = json.loads(body)
+        self.assertIn("id", data)
+        self.assertIn("rule_type", data)
+        self.assertIsInstance(data["id"], int)
+
+    def test_alerts_rules_post_invalid_type_returns_400(self):
+        status, _ = self._request(
+            "POST", "/api/alerts/rules",
+            body={"rule_type": "invalid_type", "condition": {}, "action": {"type": "desktop"}}
+        )
+        self.assertEqual(status, 400)
+
+    def test_alerts_rules_patch(self):
+        # Create a rule first
+        _, body = self._request(
+            "POST", "/api/alerts/rules",
+            body={"rule_type": "new_ip", "condition": {}, "action": {"type": "desktop"}}
+        )
+        rule = json.loads(body)
+        rid = rule["id"]
+        # Patch it
+        status, body = self._request("PATCH", f"/api/alerts/rules/{rid}", body={"enabled": 0})
+        self.assertEqual(status, 200)
+        updated = json.loads(body)
+        self.assertEqual(updated["enabled"], 0)
+
+    def test_alerts_rules_delete(self):
+        # Create a rule
+        _, body = self._request(
+            "POST", "/api/alerts/rules",
+            body={"rule_type": "new_ip", "condition": {}, "action": {"type": "desktop"}}
+        )
+        rid = json.loads(body)["id"]
+        # Get count before
+        _, list_body = self._request("GET", "/api/alerts/rules")
+        before_count = len(json.loads(list_body))
+        # Delete
+        self._request("DELETE", f"/api/alerts/rules/{rid}")
+        # Verify fewer rules
+        _, list_body2 = self._request("GET", "/api/alerts/rules")
+        after_count = len(json.loads(list_body2))
+        self.assertLess(after_count, before_count)
+
+    # ── /api/alerts/events ────────────────────────────────────────────────────
+
+    def test_alerts_events_status_200(self):
+        status, _ = self._request("GET", "/api/alerts/events")
+        self.assertEqual(status, 200)
+
+    def test_alerts_events_returns_list(self):
+        _, body = self._request("GET", "/api/alerts/events")
+        data = json.loads(body)
+        self.assertIsInstance(data, list)
+
+    # ── /api/alerts/pending ───────────────────────────────────────────────────
+
+    def test_alerts_pending_status_200(self):
+        status, _ = self._request("GET", "/api/alerts/pending")
+        self.assertEqual(status, 200)
+
+    def test_alerts_pending_returns_list(self):
+        _, body = self._request("GET", "/api/alerts/pending")
+        data = json.loads(body)
+        self.assertIsInstance(data, list)
+
+    # ── /api/alerts/unread ────────────────────────────────────────────────────
+
+    def test_alerts_unread_status_200(self):
+        status, _ = self._request("GET", "/api/alerts/unread")
+        self.assertEqual(status, 200)
+
+    def test_alerts_unread_has_count(self):
+        _, body = self._request("GET", "/api/alerts/unread")
+        data = json.loads(body)
+        self.assertIn("count", data)
+        self.assertIsInstance(data["count"], int)
+
+    # ── /api/alerts/read ──────────────────────────────────────────────────────
+
+    def test_alerts_read_post_ok(self):
+        status, body = self._request("POST", "/api/alerts/read", body={"ids": []})
+        self.assertEqual(status, 200)
+        data = json.loads(body)
+        self.assertEqual(data, {"ok": True})

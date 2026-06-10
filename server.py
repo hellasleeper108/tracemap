@@ -6,6 +6,7 @@ import json
 from collections import Counter
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
+from urllib.parse import urlparse, parse_qs
 import collector
 import db
 import threat
@@ -19,14 +20,40 @@ class _Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass  # silence access log
 
+    def _parse_path(self) -> tuple[str, dict]:
+        """Return (path_without_qs, {param: [val, ...]} dict)."""
+        parsed = urlparse(self.path)
+        return parsed.path, parse_qs(parsed.query)
+
+    def _read_json_body(self) -> dict:
+        length = int(self.headers.get("Content-Length", 0))
+        if not length:
+            return {}
+        try:
+            return json.loads(self.rfile.read(length))
+        except Exception:
+            return {}
+
     def do_GET(self):
-        path = self.path.split("?")[0]  # strip query string
+        path, params = self._parse_path()
 
         if path in ("/", "/index.html"):
             self._serve_file(STATIC_DIR / "index.html", "text/html; charset=utf-8")
 
         elif path == "/api/connections":
             self._json(collector.get_state())
+
+        elif path.startswith("/api/connections/at/"):
+            try:
+                ts = int(path.removeprefix("/api/connections/at/"))
+            except ValueError:
+                return self._error(400, "invalid timestamp")
+            window = int((params.get("window") or ["300"])[0])
+            self._json(db.get_connections_at(ts, window=window))
+
+        elif path == "/api/history/timeline":
+            window = int((params.get("window") or ["24"])[0])
+            self._json(db.get_timeline(window_hours=window))
 
         elif path.startswith("/api/history/"):
             ip = path.removeprefix("/api/history/")
@@ -64,29 +91,95 @@ class _Handler(BaseHTTPRequestHandler):
                 "top_orgs":          [{"name": n, "count": v} for n, v in Counter(orgs).most_common(5)],
                 "top_countries":     [{"code": n, "count": v} for n, v in Counter(countries).most_common(5)],
                 "threat_summary":    threat_summary,
+                "tor_count":         sum(1 for c in conns if c.get("is_tor")),
+                "vpn_count":         sum(1 for c in conns if c.get("is_vpn")),
             })
 
+        elif path == "/api/alerts/rules":
+            self._json(db.get_alert_rules(enabled_only=False))
+
+        elif path == "/api/alerts/events":
+            limit = int((params.get("limit") or ["50"])[0])
+            self._json(db.get_alert_events(limit=limit))
+
+        elif path == "/api/alerts/pending":
+            self._json(db.pop_pending_alerts())
+
+        elif path == "/api/alerts/unread":
+            self._json({"count": db.get_unread_alert_count()})
+
         else:
-            self.send_response(404)
-            self.end_headers()
+            self._error(404, "not found")
 
     def do_POST(self):
-        path = self.path.split("?")[0]
+        path, _ = self._parse_path()
+
         if path.startswith("/api/traceroute/"):
             ip     = path.removeprefix("/api/traceroute/")
             status = tr.start(ip)
             self._json({"status": status})
+
+        elif path == "/api/alerts/rules":
+            body = self._read_json_body()
+            rule_type = body.get("rule_type", "")
+            if rule_type not in ("country", "threat_score", "new_ip", "new_process"):
+                return self._error(400, "invalid rule_type")
+            cond = body.get("condition", {})
+            act  = body.get("action",    {"type": "desktop"})
+            rid  = db.create_alert_rule(
+                rule_type = rule_type,
+                condition = json.dumps(cond) if isinstance(cond, dict) else str(cond),
+                action    = json.dumps(act)  if isinstance(act,  dict) else str(act),
+            )
+            self._json(db.get_alert_rule(rid))
+
+        elif path == "/api/alerts/read":
+            body = self._read_json_body()
+            ids  = body.get("ids")  # list or None (None = mark all)
+            db.mark_alerts_read(ids)
+            self._json({"ok": True})
+
         else:
-            self.send_response(404)
-            self.end_headers()
+            self._error(404, "not found")
+
+    def do_DELETE(self):
+        path, _ = self._parse_path()
+
+        if path.startswith("/api/alerts/rules/"):
+            try:
+                rid = int(path.removeprefix("/api/alerts/rules/"))
+            except ValueError:
+                return self._error(400, "invalid id")
+            db.delete_alert_rule(rid)
+            self._json({"ok": True})
+
+        else:
+            self._error(404, "not found")
+
+    def do_PATCH(self):
+        path, _ = self._parse_path()
+
+        if path.startswith("/api/alerts/rules/"):
+            try:
+                rid = int(path.removeprefix("/api/alerts/rules/"))
+            except ValueError:
+                return self._error(400, "invalid id")
+            body = self._read_json_body()
+            db.update_alert_rule(rid, **{k: v for k, v in body.items()
+                                         if k in ("enabled", "condition", "action")})
+            rule = db.get_alert_rule(rid)
+            if rule is None:
+                return self._error(404, "rule not found")
+            self._json(rule)
+
+        else:
+            self._error(404, "not found")
 
     def _serve_file(self, path: Path, content_type: str):
         try:
             body = path.read_bytes()
         except FileNotFoundError:
-            self.send_response(404)
-            self.end_headers()
-            return
+            return self._error(404, "file not found")
         self.send_response(200)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
@@ -99,6 +192,14 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _error(self, code: int, msg: str):
+        body = json.dumps({"error": msg}).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
 

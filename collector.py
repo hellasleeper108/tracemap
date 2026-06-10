@@ -3,6 +3,7 @@ collector.py — ss polling, connection parsing, and the background updater loop
 Owns the shared in-memory state that the server reads.
 """
 
+import json
 import re
 import socket
 import subprocess
@@ -13,6 +14,8 @@ from concurrent.futures import ThreadPoolExecutor
 import db
 import geo
 import threat
+import reputation
+import alerts
 
 REFRESH_INTERVAL = 5  # seconds
 
@@ -166,11 +169,26 @@ def updater_loop():
             if g:
                 entry = {**c, **g}
                 entry["hostname"] = dns_data.get(c["ip"], "")
+                entry["is_tor"]   = reputation.is_tor(c["ip"])
+                entry["is_vpn"]   = reputation.is_vpn(g.get("org", ""))
                 t = db.get_threat(c["ip"])
                 if t:
-                    entry["abuse_score"] = t["abuse_score"]
+                    entry["abuse_score"]    = t["abuse_score"]
                     entry["threat_reports"] = t["reports"]
+                # Merge multi-source threat scores
+                sources = db.get_threat_sources(c["ip"])
+                if sources:
+                    entry["threat_sources"] = [
+                        {"source": s["source"], "score": s["score"],
+                         "raw": json.loads(s["raw"])}
+                        for s in sources
+                    ]
+                    max_src = max(s["score"] for s in sources)
+                    if max_src > (entry.get("abuse_score") or 0):
+                        entry["abuse_score"] = max_src
                 enriched.append(entry)
+
+        alerts.evaluate(enriched)
 
         with _lock:
             _connections  = enriched
