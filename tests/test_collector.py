@@ -1,9 +1,13 @@
+import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from collector import _parse_peer, _extract_process, _is_public
+import db
+from collector import _parse_peer, _extract_process, _is_public, _resolve_hostname, resolve_hostnames
 
 
 class TestParsePeer(unittest.TestCase):
@@ -135,3 +139,209 @@ class TestIsPublic(unittest.TestCase):
 
     def test_empty_string(self):
         self.assertFalse(_is_public(""))
+
+
+class TestResolveHostname(unittest.TestCase):
+    def test_getfqdn_returns_ip_means_empty(self):
+        with patch("socket.getfqdn", return_value="8.8.8.8"):
+            _, hostname = _resolve_hostname("8.8.8.8")
+        self.assertEqual(hostname, "")
+
+    def test_getfqdn_returns_name(self):
+        with patch("socket.getfqdn", return_value="dns.google"):
+            _, hostname = _resolve_hostname("8.8.8.8")
+        self.assertEqual(hostname, "dns.google")
+
+    def test_getfqdn_returns_ip_as_name(self):
+        ip, hostname = _resolve_hostname("8.8.8.8")
+        self.assertEqual(ip, "8.8.8.8")
+
+    def test_exception_returns_empty_string(self):
+        with patch("socket.getfqdn", side_effect=OSError("timeout")):
+            _, hostname = _resolve_hostname("1.2.3.4")
+        self.assertEqual(hostname, "")
+
+
+class TestResolveHostnames(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.tmp.close()
+        self.p = patch("db.DB_PATH", Path(self.tmp.name))
+        self.p.start()
+        db.init_db()
+
+    def tearDown(self):
+        self.p.stop()
+        os.unlink(self.tmp.name)
+
+    def test_empty_list_returns_empty_dict(self):
+        self.assertEqual(resolve_hostnames([]), {})
+
+    def test_uses_db_cache(self):
+        db.set_hostname("1.2.3.4", "cached.example.com")
+        with patch("socket.getfqdn") as mock_fqdn:
+            result = resolve_hostnames(["1.2.3.4"])
+            mock_fqdn.assert_not_called()
+        self.assertEqual(result["1.2.3.4"], "cached.example.com")
+
+    def test_resolves_uncached_ip(self):
+        with patch("socket.getfqdn", return_value="example.com"):
+            result = resolve_hostnames(["1.2.3.4"])
+        self.assertEqual(result["1.2.3.4"], "example.com")
+
+    def test_caches_resolved_hostname(self):
+        with patch("socket.getfqdn", return_value="example.com"):
+            resolve_hostnames(["1.2.3.4"])
+        self.assertEqual(db.get_hostname("1.2.3.4"), "example.com")
+
+    def test_dns_failure_returns_empty_string(self):
+        with patch("socket.getfqdn", side_effect=OSError("Network unreachable")):
+            result = resolve_hostnames(["1.2.3.4"])
+        self.assertEqual(result.get("1.2.3.4"), "")
+
+    def test_dns_failure_caches_empty_string(self):
+        with patch("socket.getfqdn", side_effect=OSError("timeout")):
+            resolve_hostnames(["1.2.3.4"])
+        self.assertEqual(db.get_hostname("1.2.3.4"), "")
+
+
+class TestGetStateHostname(unittest.TestCase):
+    def test_get_state_includes_hostname(self):
+        import collector
+        original = collector._connections
+        try:
+            collector._connections = [{
+                "ip": "1.2.3.4", "port": "443",
+                "hostname": "example.com", "process": "test",
+            }]
+            state = collector.get_state()
+            self.assertGreater(len(state["connections"]), 0)
+            self.assertEqual(state["connections"][0]["hostname"], "example.com")
+        finally:
+            collector._connections = original
+
+
+# ── Bandwidth helpers ─────────────────────────────────────────────────────────
+
+from collector import _parse_bw_info, _compute_bw, _extract_pid
+
+
+class TestParseBwInfo(unittest.TestCase):
+    def test_bytes_received_parsed(self):
+        line = "\t bytes_received:12345 bytes_sent:0 send_queue:0 cwnd:10"
+        recv, sent = _parse_bw_info(line)
+        self.assertEqual(recv, 12345)
+
+    def test_bytes_sent_parsed(self):
+        line = "\t bytes_received:100 bytes_sent:500"
+        recv, sent = _parse_bw_info(line)
+        self.assertEqual(sent, 500)
+
+    def test_bytes_acked_fallback(self):
+        line = "\t bytes_received:100 bytes_acked:300"
+        recv, sent = _parse_bw_info(line)
+        self.assertEqual(sent, 300)
+
+    def test_empty_line_returns_zeros(self):
+        recv, sent = _parse_bw_info("")
+        self.assertEqual(recv, 0)
+        self.assertEqual(sent, 0)
+
+    def test_bytes_sent_preferred_over_acked(self):
+        line = "\t bytes_received:0 bytes_sent:200 bytes_acked:100"
+        recv, sent = _parse_bw_info(line)
+        self.assertEqual(sent, 200)
+
+
+class TestComputeBw(unittest.TestCase):
+    def setUp(self):
+        import collector
+        collector._bw_state.clear()
+
+    def tearDown(self):
+        import collector
+        collector._bw_state.clear()
+
+    def test_first_call_returns_zero_bps(self):
+        recv_bps, send_bps = _compute_bw(("1.2.3.4", "443", "5000"), 1000, 500, 1000.0)
+        self.assertEqual(recv_bps, 0.0)
+        self.assertEqual(send_bps, 0.0)
+
+    def test_second_call_computes_delta(self):
+        key = ("1.2.3.4", "443", "5000")
+        _compute_bw(key, 0, 0, 1000.0)
+        recv_bps, send_bps = _compute_bw(key, 10000, 5000, 1010.0)
+        self.assertAlmostEqual(recv_bps, 1000.0, places=1)
+        self.assertAlmostEqual(send_bps, 500.0, places=1)
+
+    def test_negative_bytes_recv_returns_zero(self):
+        key = ("1.2.3.4", "443", "5000")
+        _compute_bw(key, 1000, 0, 1000.0)
+        # bytes_recv went backwards (shouldn't happen normally)
+        recv_bps, send_bps = _compute_bw(key, 500, 0, 1010.0)
+        self.assertEqual(recv_bps, 0.0)
+
+
+class TestExtractPid(unittest.TestCase):
+    def test_extracts_pid(self):
+        field = 'users:(("chrome",pid=1234,fd=5))'
+        self.assertEqual(_extract_pid(field), 1234)
+
+    def test_returns_none_when_no_pid(self):
+        self.assertIsNone(_extract_pid(""))
+
+    def test_returns_none_for_unrelated_text(self):
+        self.assertIsNone(_extract_pid("some text without pid"))
+
+
+# ── Docker helpers ────────────────────────────────────────────────────────────
+
+from collector import _get_container_id, _get_container_name, _resolve_container
+
+
+class TestGetContainerId(unittest.TestCase):
+    def test_finds_container_id(self):
+        cgroup_content = "12:cpu:/docker/abc123def456789012345678901234567890abcdef12345678\n"
+        mock_open = unittest.mock.mock_open(read_data=cgroup_content)
+        with patch("builtins.open", mock_open):
+            cid = _get_container_id(1234)
+        self.assertEqual(cid, "abc123def456")
+
+    def test_returns_none_when_no_docker(self):
+        cgroup_content = "12:cpu:/system.slice/sshd.service\n"
+        mock_open = unittest.mock.mock_open(read_data=cgroup_content)
+        with patch("builtins.open", mock_open):
+            cid = _get_container_id(1234)
+        self.assertIsNone(cid)
+
+    def test_returns_none_on_oserror(self):
+        with patch("builtins.open", side_effect=OSError):
+            cid = _get_container_id(9999)
+        self.assertIsNone(cid)
+
+
+class TestResolveContainer(unittest.TestCase):
+    def test_returns_empty_when_pid_none(self):
+        cid, cname = _resolve_container(None)
+        self.assertEqual(cid, "")
+        self.assertEqual(cname, "")
+
+    def test_returns_empty_when_no_container_id(self):
+        with patch("collector._get_container_id", return_value=None):
+            cid, cname = _resolve_container(1234)
+        self.assertEqual(cid, "")
+        self.assertEqual(cname, "")
+
+    def test_returns_name_from_docker_socket(self):
+        with patch("collector._get_container_id", return_value="abc123def456"), \
+             patch("collector._get_container_name", return_value="my-container"):
+            cid, cname = _resolve_container(1234)
+        self.assertEqual(cid, "abc123def456")
+        self.assertEqual(cname, "my-container")
+
+    def test_handles_missing_container_name(self):
+        with patch("collector._get_container_id", return_value="abc123def456"), \
+             patch("collector._get_container_name", return_value=None):
+            cid, cname = _resolve_container(1234)
+        self.assertEqual(cid, "abc123def456")
+        self.assertEqual(cname, "")

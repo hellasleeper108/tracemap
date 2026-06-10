@@ -14,6 +14,7 @@ body {
   height: 100vh;
   overflow: hidden;
 }
+#map-wrap { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
 #map { flex: 1; }
 #sidebar {
   width: 300px;
@@ -31,14 +32,43 @@ body {
   border-bottom: 1px solid #30363d;
   flex-shrink: 0;
 }
+#header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
 #header h1 {
   font-size: 11px;
   letter-spacing: 3px;
   text-transform: uppercase;
   color: #58a6ff;
-  margin-bottom: 4px;
 }
 #stats { font-size: 11px; color: #8b949e; }
+#alert-bell {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 16px;
+  position: relative;
+  padding: 0 2px;
+  line-height: 1;
+}
+#alert-badge {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  background: #f85149;
+  color: #fff;
+  font-size: 8px;
+  font-family: inherit;
+  padding: 1px 3px;
+  border-radius: 6px;
+  line-height: 1;
+  min-width: 12px;
+  text-align: center;
+  display: none;
+}
 
 /* ── Host info ── */
 #host-info {
@@ -108,6 +138,10 @@ body {
 .threat-chip        { border-color: rgba(240,136,62,0.5); color: #f0883e; background: rgba(240,136,62,0.05); }
 .threat-chip.active { background: rgba(240,136,62,0.15); border-color: #f0883e; }
 .threat-chip:hover  { border-color: #f0883e; }
+.tor-chip        { border-color: rgba(255,107,107,0.4); color: #ff7b7b; background: rgba(255,107,107,0.05); }
+.tor-chip.active { background: rgba(255,107,107,0.12); border-color: #ff7b7b; }
+.vpn-chip        { border-color: rgba(121,192,255,0.4); color: #79c0ff; background: rgba(121,192,255,0.05); }
+.vpn-chip.active { background: rgba(121,192,255,0.12); border-color: #79c0ff; }
 
 /* ── Connection list ── */
 #conn-list { flex: 1; overflow-y: auto; }
@@ -294,15 +328,516 @@ body {
   transition: border-color 0.12s, color 0.12s;
 }
 .trace-btn:hover { border-color: #58a6ff; color: #58a6ff; }
+
+/* ── Hostname in sidebar rows ── */
+.conn .hostname { font-size: 10px; color: #6e7681; margin-top: 1px; font-style: italic; }
+
+/* ── Rep badges (Tor / VPN) ── */
+.rep-badge {
+  display: inline-block;
+  font-size: 9px;
+  padding: 1px 4px;
+  border-radius: 2px;
+  margin-left: 4px;
+  font-weight: bold;
+  vertical-align: middle;
+}
+.rep-tor { background: rgba(255,107,107,0.15); color: #ff7b7b; border: 1px solid rgba(255,107,107,0.3); }
+.rep-vpn { background: rgba(88,166,255,0.1);   color: #79c0ff; border: 1px solid rgba(88,166,255,0.25); }
+
+/* ── Multi-source threat badges ── */
+.src-badge {
+  display: inline-block;
+  font-size: 9px;
+  padding: 1px 4px;
+  border-radius: 2px;
+  margin-right: 3px;
+  border: 1px solid;
+}
+.src-vt     { color: #56d364; border-color: rgba(86,211,100,0.35); background: rgba(86,211,100,0.08); }
+.src-shodan { color: #ffa657; border-color: rgba(255,166,87,0.35); background: rgba(255,166,87,0.08); }
+
+/* ── Stats bar ── */
+#stats-bar { border-bottom: 1px solid #30363d; flex-shrink: 0; }
+#stats-toggle {
+  padding: 6px 16px;
+  font-size: 10px;
+  color: #484f58;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  user-select: none;
+  transition: color 0.12s;
+}
+#stats-toggle:hover { color: #8b949e; }
+#stats-toggle .stats-arrow { font-size: 8px; transition: transform 0.15s; }
+#stats-toggle.open .stats-arrow { transform: rotate(180deg); }
+#stats-cards {
+  display: none;
+  padding: 0 12px 8px;
+  flex-direction: column;
+  gap: 5px;
+}
+#stats-cards.open { display: flex; }
+.stat-row {
+  font-size: 10px;
+  color: #8b949e;
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+.stat-row-key { color: #484f58; min-width: 52px; flex-shrink: 0; padding-top: 1px; }
+.stat-chip {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  border: 1px solid #21262d;
+  color: #6e7681;
+  background: #0d1117;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  transition: border-color 0.1s, color 0.1s;
+}
+.stat-chip:hover { border-color: #58a6ff; color: #58a6ff; }
+
+/* ── Context menu ── */
+#ctx-menu {
+  position: fixed;
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  padding: 4px 0;
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 12px;
+  z-index: 9999;
+  min-width: 160px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.6);
+  display: none;
+}
+.ctx-item {
+  padding: 6px 14px;
+  cursor: pointer;
+  color: #c9d1d9;
+  transition: background 0.1s;
+  white-space: nowrap;
+}
+.ctx-item:hover { background: #21262d; }
+.ctx-disabled { color: #484f58 !important; cursor: not-allowed; }
+.ctx-disabled:hover { background: transparent !important; }
+.ctx-sep { border-top: 1px solid #21262d; margin: 3px 0; }
+.ctx-tag { font-size: 9px; color: #3d444d; margin-left: 6px; }
+
+/* ── "All" process chip ── */
+.chip-all { color: #58a6ff !important; border-color: #388bfd !important; background: rgba(56,139,253,0.08) !important; }
+
+/* ── Timeline bar ── */
+#timeline-bar {
+  height: 56px;
+  background: #0d1117;
+  border-top: 1px solid #21262d;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  flex-shrink: 0;
+}
+#tl-controls { display: flex; gap: 4px; align-items: center; flex-shrink: 0; }
+#tl-live, #tl-play, #tl-stop {
+  font-size: 9px;
+  padding: 3px 7px;
+  border-radius: 3px;
+  border: 1px solid #30363d;
+  background: none;
+  color: #8b949e;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.12s;
+  letter-spacing: 0.04em;
+}
+#tl-live.active { background: rgba(63,185,80,0.12); border-color: #3fb950; color: #3fb950; }
+#tl-live:hover, #tl-play:hover, #tl-stop:hover { border-color: #58a6ff; color: #58a6ff; }
+#tl-window {
+  font-size: 10px;
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 3px;
+  color: #8b949e;
+  font-family: inherit;
+  padding: 2px 4px;
+}
+#tl-canvas {
+  flex: 1;
+  height: 36px;
+  cursor: crosshair;
+  display: block;
+  border-radius: 2px;
+}
+#tl-label {
+  font-size: 10px;
+  color: #8b949e;
+  min-width: 52px;
+  text-align: right;
+  flex-shrink: 0;
+}
+#tl-hist-badge {
+  font-size: 9px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: rgba(88,166,255,0.12);
+  border: 1px solid rgba(88,166,255,0.3);
+  color: #58a6ff;
+  display: none;
+  flex-shrink: 0;
+}
+
+/* ── Toast area ── */
+#toast-area {
+  position: fixed;
+  bottom: 72px;
+  right: 16px;
+  z-index: 10000;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  pointer-events: none;
+}
+.toast {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 11px;
+  color: #c9d1d9;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.6);
+  pointer-events: all;
+  opacity: 0;
+  transition: opacity 0.25s;
+  max-width: 290px;
+  word-break: break-word;
+}
+.toast.show { opacity: 1; }
+.toast-high { border-left: 3px solid #f85149; }
+.toast-med  { border-left: 3px solid #f0883e; }
+.toast-info { border-left: 3px solid #58a6ff; }
+
+/* ── Alerts panel ── */
+#alerts-panel {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: #0d1117;
+  border-top: 1px solid #30363d;
+  transform: translateY(100%);
+  transition: transform 0.2s ease;
+  z-index: 12;
+  display: flex;
+  flex-direction: column;
+  max-height: 62%;
+}
+#alerts-panel.open { transform: translateY(0); }
+#alerts-hdr {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px 8px;
+  border-bottom: 1px solid #21262d;
+  flex-shrink: 0;
+}
+#alerts-title { font-size: 12px; font-weight: bold; color: #79c0ff; }
+#alerts-actions { display: flex; gap: 6px; align-items: center; }
+.alerts-btn {
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 3px;
+  border: 1px solid #30363d;
+  background: none;
+  color: #8b949e;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.12s;
+}
+.alerts-btn:hover { border-color: #58a6ff; color: #58a6ff; }
+#alerts-close {
+  background: none;
+  border: none;
+  color: #484f58;
+  cursor: pointer;
+  font-size: 16px;
+  padding: 0;
+  line-height: 1;
+}
+#alerts-close:hover { color: #c9d1d9; }
+#alerts-list { flex: 1; overflow-y: auto; }
+.alert-item {
+  padding: 8px 14px;
+  border-bottom: 1px solid #1c2128;
+  font-size: 11px;
+}
+.alert-item.unread { background: rgba(88,166,255,0.04); }
+.alert-item .alert-type {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #484f58;
+  margin-bottom: 2px;
+}
+.alert-item .alert-msg { color: #c9d1d9; }
+.alert-item .alert-ts { font-size: 10px; color: #3d444d; margin-top: 2px; }
+
+/* ── Rules modal ── */
+#rules-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.72);
+  z-index: 20000;
+  display: none;
+  align-items: center;
+  justify-content: center;
+}
+#rules-modal.open { display: flex; }
+#rules-card {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  width: 420px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.8);
+}
+#rules-card-hdr {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px 12px;
+  border-bottom: 1px solid #21262d;
+  flex-shrink: 0;
+}
+#rules-card-title { font-size: 13px; font-weight: bold; color: #c9d1d9; }
+#rules-close {
+  background: none;
+  border: none;
+  color: #484f58;
+  cursor: pointer;
+  font-size: 18px;
+  padding: 0;
+  line-height: 1;
+}
+#rules-close:hover { color: #c9d1d9; }
+#rules-list { flex: 1; overflow-y: auto; padding: 6px 0; }
+.rule-item {
+  padding: 8px 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid #1c2128;
+}
+.rule-toggle {
+  width: 28px;
+  height: 16px;
+  border-radius: 8px;
+  border: none;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+.rule-toggle.on  { background: #3fb950; }
+.rule-toggle.off { background: #30363d; }
+.rule-desc { flex: 1; font-size: 11px; color: #c9d1d9; min-width: 0; }
+.rule-type-tag {
+  font-size: 9px;
+  color: #484f58;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-top: 2px;
+}
+.rule-delete {
+  background: none;
+  border: none;
+  color: #3d444d;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0 2px;
+  line-height: 1;
+  transition: color 0.12s;
+}
+.rule-delete:hover { color: #f85149; }
+#rules-add {
+  padding: 10px 16px 14px;
+  border-top: 1px solid #21262d;
+  flex-shrink: 0;
+}
+#rules-add-label {
+  font-size: 10px;
+  color: #484f58;
+  margin-bottom: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+#rules-add-form { display: flex; gap: 6px; flex-wrap: wrap; }
+.rules-select, .rules-input-sm {
+  font-size: 11px;
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 3px;
+  color: #c9d1d9;
+  font-family: inherit;
+  padding: 4px 7px;
+  outline: none;
+}
+.rules-select:focus, .rules-input-sm:focus { border-color: #388bfd; }
+.rules-input-sm { flex: 1; min-width: 90px; }
+#rules-add-btn {
+  font-size: 11px;
+  padding: 4px 12px;
+  border-radius: 3px;
+  border: 1px solid #388bfd;
+  background: rgba(56,139,253,0.08);
+  color: #58a6ff;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.12s;
+}
+#rules-add-btn:hover { background: rgba(56,139,253,0.18); }
+
+/* ── Bandwidth display ── */
+.conn .bw { font-size: 10px; color: #3d444d; margin-top: 1px; }
+
+/* ── Blocked rows ── */
+.conn.blocked .ip { text-decoration: line-through; color: #484f58 !important; }
+.conn.blocked { opacity: 0.55; }
+
+/* ── Container badge ── */
+.container-badge {
+  display: inline-block;
+  font-size: 9px;
+  padding: 1px 4px;
+  border-radius: 2px;
+  margin-left: 4px;
+  background: rgba(88,166,255,0.1);
+  border: 1px solid rgba(88,166,255,0.2);
+  color: #79c0ff;
+  vertical-align: middle;
+}
+
+/* ── Agent badge ── */
+.agent-badge {
+  display: inline-block;
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 2px;
+  margin-left: 4px;
+  background: rgba(63,185,80,0.1);
+  border: 1px solid rgba(63,185,80,0.2);
+  color: #56d364;
+  vertical-align: middle;
+}
+
+/* ── Blocked / container filter chips ── */
+.blocked-chip        { border-color: rgba(248,81,73,0.4);  color: #f85149; background: rgba(248,81,73,0.05); }
+.blocked-chip.active { background: rgba(248,81,73,0.12);  border-color: #f85149; }
+.blocked-chip:hover  { border-color: #f85149; }
+.container-chip        { border-color: rgba(88,166,255,0.35); color: #79c0ff; background: rgba(88,166,255,0.04); }
+.container-chip.active { background: rgba(88,166,255,0.12); border-color: #79c0ff; }
+.container-chip:hover  { border-color: #79c0ff; }
+
+/* ── Blocked IPs panel ── */
+#blocked-panel {
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  background: #0d1117;
+  border-top: 1px solid #30363d;
+  transform: translateY(100%);
+  transition: transform 0.2s ease;
+  z-index: 11;
+  display: flex;
+  flex-direction: column;
+  max-height: 55%;
+}
+#blocked-panel.open { transform: translateY(0); }
+#blocked-hdr {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px 8px;
+  border-bottom: 1px solid #21262d;
+  flex-shrink: 0;
+}
+#blocked-title { font-size: 12px; font-weight: bold; color: #f85149; }
+#blocked-close { background: none; border: none; color: #484f58; cursor: pointer; font-size: 16px; padding: 0; line-height: 1; }
+#blocked-close:hover { color: #c9d1d9; }
+#blocked-list { flex: 1; overflow-y: auto; }
+.blocked-item {
+  padding: 7px 14px;
+  border-bottom: 1px solid #1c2128;
+  font-size: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.blocked-item-info { flex: 1; min-width: 0; }
+.blocked-item .blocked-ip { color: #f85149; }
+.blocked-item .blocked-ts { font-size: 10px; color: #3d444d; margin-top: 2px; }
+.unblock-btn {
+  background: none;
+  border: 1px solid #30363d;
+  border-radius: 3px;
+  color: #6e7681;
+  cursor: pointer;
+  font-size: 10px;
+  font-family: inherit;
+  padding: 2px 7px;
+  flex-shrink: 0;
+  transition: border-color 0.12s, color 0.12s;
+}
+.unblock-btn:hover { border-color: #f85149; color: #f85149; }
 </style>
 </head>
 <body>
-<div id="map"></div>
+<div id="map-wrap">
+  <div id="map"></div>
+  <!-- Timeline bar -->
+  <div id="timeline-bar">
+    <div id="tl-controls">
+      <button id="tl-live" class="active">LIVE</button>
+      <button id="tl-play">&#9654; PLAY</button>
+      <button id="tl-stop" style="display:none">&#9632; STOP</button>
+      <select id="tl-window">
+        <option value="6">6h</option>
+        <option value="12">12h</option>
+        <option value="24" selected>24h</option>
+        <option value="48">48h</option>
+      </select>
+    </div>
+    <canvas id="tl-canvas"></canvas>
+    <span id="tl-hist-badge">HIST</span>
+    <div id="tl-label">LIVE</div>
+  </div>
+</div>
+
 <div id="sidebar">
   <div id="header">
-    <h1>Network Trace Map</h1>
+    <div id="header-row">
+      <h1>Network Trace Map</h1>
+      <button id="alert-bell" title="View Alerts">&#128276;<span id="alert-badge"></span></button>
+    </div>
     <div id="stats">Connecting&hellip;</div>
   </div>
+
+  <!-- Stats bar (collapsible) -->
+  <div id="stats-bar">
+    <div id="stats-toggle">
+      <span id="stats-summary">loading&hellip;</span>
+      <span class="stats-arrow">&#9662;</span>
+    </div>
+    <div id="stats-cards"></div>
+  </div>
+
   <div id="host-info"><span class="label">HOST</span> &mdash; loading&hellip;</div>
 
   <div id="filter-bar">
@@ -325,9 +860,9 @@ body {
     <div class="row"><div class="dot" style="background:#f0883e"></div> Suspicious (score 25&ndash;74)</div>
     <div class="row"><div class="dot" style="background:#e3b341"></div> Low risk (score 1&ndash;24)</div>
   </div>
-  <div id="footer">Refreshes every 5s &bull; ip-api.com &bull; abuseipdb.com</div>
+  <div id="footer">Refreshes every 5s &bull; ip-api.com &bull; abuseipdb.com &bull; Tor/VPN detection</div>
 
-  <!-- History panel (slides up from bottom) -->
+  <!-- IP history panel (slides up from bottom) -->
   <div id="history-panel">
     <div id="history-header">
       <div>
@@ -339,8 +874,68 @@ body {
     <div id="history-chart-wrap">
       <canvas id="history-canvas"></canvas>
     </div>
-    <div id="history-footer" id="history-summary"></div>
+    <div id="history-footer"></div>
   </div>
+
+  <!-- Blocked IPs panel (slides up from bottom) -->
+  <div id="blocked-panel">
+    <div id="blocked-hdr">
+      <span id="blocked-title">&#8856; Blocked IPs</span>
+      <button id="blocked-close">&times;</button>
+    </div>
+    <div id="blocked-list"></div>
+  </div>
+
+  <!-- Alerts panel (slides up from bottom, z-index above history) -->
+  <div id="alerts-panel">
+    <div id="alerts-hdr">
+      <span id="alerts-title">&#128276; Alerts</span>
+      <div id="alerts-actions">
+        <button class="alerts-btn" id="alerts-rules-btn">&#9881; Rules</button>
+        <button class="alerts-btn" id="alerts-mark-read">Mark all read</button>
+        <button id="alerts-close">&times;</button>
+      </div>
+    </div>
+    <div id="alerts-list"></div>
+  </div>
+</div>
+
+<!-- Toast notifications -->
+<div id="toast-area"></div>
+
+<!-- Alert Rules modal -->
+<div id="rules-modal">
+  <div id="rules-card">
+    <div id="rules-card-hdr">
+      <span id="rules-card-title">Alert Rules</span>
+      <button id="rules-close">&times;</button>
+    </div>
+    <div id="rules-list"></div>
+    <div id="rules-add">
+      <div id="rules-add-label">Add Rule</div>
+      <div id="rules-add-form">
+        <select id="rules-type-select" class="rules-select">
+          <option value="country">country</option>
+          <option value="threat_score">threat_score</option>
+          <option value="new_ip">new_ip</option>
+          <option value="new_process">new_process</option>
+        </select>
+        <input id="rules-cond-val" class="rules-input-sm" type="text" placeholder="CC (e.g. CN)">
+        <button id="rules-add-btn">+ Add</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Context menu -->
+<div id="ctx-menu">
+  <div class="ctx-item" data-action="traceroute">&#10547; Trace Route</div>
+  <div class="ctx-item" data-action="threat">&#9873; Threat Lookup</div>
+  <div class="ctx-item" data-action="copy">&#8984; Copy IP</div>
+  <div class="ctx-item" data-action="history">&#9202; Connection History</div>
+  <div class="ctx-sep"></div>
+  <div class="ctx-item" data-action="block">&#8856; Block IP</div>
+  <div class="ctx-item" data-action="blocked-panel">&#9632; Blocked IPs&hellip;</div>
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -385,16 +980,43 @@ function threatLabel(score, reports) {
   return `<span class="threat-badge badge-${lvl}">${icons[lvl]} ${labels[lvl]} · score ${score} · ${reports} report${reports !== 1 ? 's' : ''}</span>`;
 }
 
-function markerColor(proc, score) {
+function markerColor(proc, score, isTor, isVpn) {
   const lvl = threatLevel(score);
   if (lvl === 'high') return '#f85149';
   if (lvl === 'med')  return '#f0883e';
+  if (isTor)  return '#ff6b6b';
+  if (isVpn)  return '#79c0ff';
   return procColor(proc);
 }
 
 function hexToRgba(hex, a) {
   const n = parseInt(hex.slice(1), 16);
   return `rgba(${n>>16},${(n>>8)&255},${n&255},${a})`;
+}
+
+// ── Bandwidth helpers ─────────────────────────────────────────────────────────
+
+function fmtBps(bps) {
+  if (!bps || bps < 1) return '';
+  if (bps < 1024)      return `${Math.round(bps)} B/s`;
+  if (bps < 1048576)   return `${(bps / 1024).toFixed(1)} KB/s`;
+  return `${(bps / 1048576).toFixed(2)} MB/s`;
+}
+
+function arcBwWeight(bps) {
+  if (!bps || bps < 100) return 1.2;
+  return Math.min(8, 1.2 + Math.log10(bps / 100) * 1.8);
+}
+
+// ── Source badges ─────────────────────────────────────────────────────────────
+
+function sourceBadges(sources) {
+  if (!sources || !sources.length) return '';
+  return sources.map(s => {
+    const cls = s.source === 'virustotal' ? 'src-vt' : 'src-shodan';
+    const lbl = s.source === 'virustotal' ? 'VT'     : 'Shodan';
+    return `<span class="src-badge ${cls}">${lbl}&nbsp;${s.score}</span>`;
+  }).join('');
 }
 
 // ── Process colors ────────────────────────────────────────────────────────────
@@ -410,32 +1032,44 @@ function procColor(proc) {
 
 // ── Filter state ──────────────────────────────────────────────────────────────
 
-let searchText  = '';
-let activeProcs = new Set();
-let threatOnly  = false;
-let lastData    = null;
+let searchText     = '';
+let activeProcs    = new Set();
+let threatOnly     = false;
+let torOnly        = false;
+let vpnOnly        = false;
+let containerOnly  = false;
+let blockedOnly    = false;
+let lastData       = null;
 
 function matchesFilter(c) {
   if (searchText) {
     const q = searchText.toLowerCase();
-    const hay = [c.ip, c.city, c.country, c.countryCode, c.org, c.isp, c.process]
+    const hay = [c.ip, c.city, c.country, c.countryCode, c.org, c.isp, c.process, c.hostname, c.container, c.agent_label]
       .filter(Boolean).join(' ').toLowerCase();
     if (!hay.includes(q)) return false;
   }
   if (activeProcs.size > 0 && !activeProcs.has(c.process || '')) return false;
-  if (threatOnly && !(c.abuse_score > 0)) return false;
+  if (threatOnly     && !(c.abuse_score > 0)) return false;
+  if (torOnly        && !c.is_tor)            return false;
+  if (vpnOnly        && !c.is_vpn)            return false;
+  if (containerOnly  && !c.container)         return false;
+  if (blockedOnly    && !c.is_blocked)        return false;
   return true;
 }
 
 function updateClearBtn() {
-  const on = searchText !== '' || activeProcs.size > 0 || threatOnly;
+  const on = searchText !== '' || activeProcs.size > 0 || threatOnly || torOnly || vpnOnly || containerOnly || blockedOnly;
   document.getElementById('clear-btn').style.display = on ? 'block' : 'none';
 }
 
 function clearAll() {
-  searchText = '';
+  searchText    = '';
   activeProcs.clear();
-  threatOnly = false;
+  threatOnly    = false;
+  torOnly       = false;
+  vpnOnly       = false;
+  containerOnly = false;
+  blockedOnly   = false;
   document.getElementById('search-input').value = '';
   updateClearBtn();
   if (lastData) { renderChips(lastData.connections, lastData.threat_enabled); applyFilter(lastData.connections); }
@@ -443,15 +1077,33 @@ function clearAll() {
 
 function renderChips(connections, threatEnabled) {
   const container = document.getElementById('chips');
-  const procs = [...new Set(connections.map(c => c.process).filter(Boolean))].sort();
+  const procCounts = {};
+  connections.forEach(c => { if (c.process) procCounts[c.process] = (procCounts[c.process] || 0) + 1; });
+  const procs    = Object.keys(procCounts).sort();
+  const hasTor   = connections.some(c => c.is_tor);
+  const hasVpn   = connections.some(c => c.is_vpn);
   const hasThreats = threatEnabled && connections.some(c => c.abuse_score > 0);
   container.innerHTML = '';
+
+  if (activeProcs.size > 0) {
+    const allChip = document.createElement('span');
+    allChip.className = 'chip chip-all';
+    allChip.textContent = 'All';
+    allChip.onclick = () => {
+      activeProcs.clear();
+      updateClearBtn();
+      if (lastData) { renderChips(lastData.connections, lastData.threat_enabled); applyFilter(lastData.connections); }
+    };
+    container.appendChild(allChip);
+  }
+
   procs.forEach(proc => {
     const color  = procColors[proc] || '#6e7681';
     const active = activeProcs.has(proc);
+    const count  = procCounts[proc];
     const chip   = document.createElement('span');
     chip.className = 'chip' + (active ? ' active' : '');
-    chip.textContent = proc;
+    chip.textContent = `${proc} (${count})`;
     if (active) { chip.style.borderColor = color; chip.style.color = color; chip.style.background = hexToRgba(color, 0.12); }
     chip.onclick = () => {
       if (activeProcs.has(proc)) activeProcs.delete(proc); else activeProcs.add(proc);
@@ -460,12 +1112,63 @@ function renderChips(connections, threatEnabled) {
     };
     container.appendChild(chip);
   });
+
   if (hasThreats) {
     const chip = document.createElement('span');
     chip.className = 'chip threat-chip' + (threatOnly ? ' active' : '');
     chip.textContent = '⚠ threats';
     chip.onclick = () => {
       threatOnly = !threatOnly;
+      updateClearBtn();
+      if (lastData) { renderChips(lastData.connections, lastData.threat_enabled); applyFilter(lastData.connections); }
+    };
+    container.appendChild(chip);
+  }
+
+  if (hasTor) {
+    const chip = document.createElement('span');
+    chip.className = 'chip tor-chip' + (torOnly ? ' active' : '');
+    chip.textContent = 'Tor';
+    chip.onclick = () => {
+      torOnly = !torOnly; if (torOnly) vpnOnly = false;
+      updateClearBtn();
+      if (lastData) { renderChips(lastData.connections, lastData.threat_enabled); applyFilter(lastData.connections); }
+    };
+    container.appendChild(chip);
+  }
+
+  if (hasVpn) {
+    const chip = document.createElement('span');
+    chip.className = 'chip vpn-chip' + (vpnOnly ? ' active' : '');
+    chip.textContent = 'VPN';
+    chip.onclick = () => {
+      vpnOnly = !vpnOnly; if (vpnOnly) torOnly = false;
+      updateClearBtn();
+      if (lastData) { renderChips(lastData.connections, lastData.threat_enabled); applyFilter(lastData.connections); }
+    };
+    container.appendChild(chip);
+  }
+
+  const hasContainers = connections.some(c => c.container);
+  if (hasContainers) {
+    const chip = document.createElement('span');
+    chip.className = 'chip container-chip' + (containerOnly ? ' active' : '');
+    chip.textContent = '🐳 docker';
+    chip.onclick = () => {
+      containerOnly = !containerOnly;
+      updateClearBtn();
+      if (lastData) { renderChips(lastData.connections, lastData.threat_enabled); applyFilter(lastData.connections); }
+    };
+    container.appendChild(chip);
+  }
+
+  const hasBlocked = connections.some(c => c.is_blocked);
+  if (hasBlocked) {
+    const chip = document.createElement('span');
+    chip.className = 'chip blocked-chip' + (blockedOnly ? ' active' : '');
+    chip.textContent = '衖 blocked';
+    chip.onclick = () => {
+      blockedOnly = !blockedOnly;
       updateClearBtn();
       if (lastData) { renderChips(lastData.connections, lastData.threat_enabled); applyFilter(lastData.connections); }
     };
@@ -480,13 +1183,13 @@ function applyFilter(connections) {
     const m = matchesFilter(c);
     if (m) { matchCount++; ipMatched[c.ip] = true; }
     else if (ipMatched[c.ip] === undefined) ipMatched[c.ip] = false;
-    const row = rowMap[c.ip + ':' + c.port];
+    const row = rowMap[c.ip + ':' + c.port + ':' + (c.agent_label || '')];
     if (row) row.style.display = m ? '' : 'none';
   });
   Object.entries(ipMatched).forEach(([ip, matched]) => {
     if (peerMarkers[ip]) peerMarkers[ip].setOpacity(matched ? 1 : 0.08);
     if (arcMap[ip]) {
-      const { line, c } = arcMap[ip];
+      const { c } = arcMap[ip];
       const lvl = threatLevel(c.abuse_score);
       arcMap[ip].line.setStyle({ opacity: matched ? (lvl === 'high' ? 0.7 : 0.45) : 0.04 });
     }
@@ -506,14 +1209,14 @@ function applyFilter(connections) {
 
 let hostMarker = null, hostLatLng = null;
 let peerMarkers = {};
-let arcMap  = {};   // ip → { line, c }
-let rowMap  = {};   // "ip:port" → DOM row
+let arcMap  = {};
+let rowMap  = {};
 
 // ── Arc drawing ───────────────────────────────────────────────────────────────
 
 function gcArc(from, to, steps=60) {
-  const pts   = [];
-  const dist  = Math.hypot(to[0]-from[0], to[1]-from[1]);
+  const pts  = [];
+  const dist = Math.hypot(to[0]-from[0], to[1]-from[1]);
   const bulge = Math.min(dist * 0.25, 30);
   for (let i = 0; i <= steps; i++) {
     const t = i / steps;
@@ -558,8 +1261,7 @@ function drawTrace(ip, hops) {
   }
 
   const validHops = hops.filter(h => h.ip);
-  document.getElementById('trace-msg').textContent =
-    `trace: ${ip} · ${validHops.length} hops`;
+  document.getElementById('trace-msg').textContent = `trace: ${ip} · ${validHops.length} hops`;
   document.getElementById('trace-status').classList.add('visible');
 }
 
@@ -597,7 +1299,7 @@ async function startTrace(ip) {
 
 document.getElementById('clear-trace-btn').addEventListener('click', clearTrace);
 
-// ── History panel ─────────────────────────────────────────────────────────────
+// ── IP history panel ──────────────────────────────────────────────────────────
 
 async function openHistory(ip) {
   const panel = document.getElementById('history-panel');
@@ -624,7 +1326,6 @@ async function openHistory(ip) {
   document.getElementById('history-footer').textContent =
     `ports: ${ports || '?'}`;
 
-  // Draw sparkline — 24 hourly buckets
   const canvas = document.getElementById('history-canvas');
   const ctx    = canvas.getContext('2d');
   const W      = canvas.offsetWidth  || 272;
@@ -668,23 +1369,125 @@ document.getElementById('history-close').addEventListener('click', () => {
 // ── Popup content ─────────────────────────────────────────────────────────────
 
 function popupHtml(c) {
-  const lvl   = threatLevel(c.abuse_score);
-  const tline = lvl
+  const lvl    = threatLevel(c.abuse_score);
+  const tline  = lvl
     ? `<br><span style="color:${lvl==='high'?'#f85149':lvl==='med'?'#f0883e':'#e3b341'}">
        ${lvl==='high'?'☠':'⚠'} AbuseIPDB: ${c.abuse_score}/100 (${c.threat_reports} reports)</span>`
     : '';
-  return `<b>${c.ip}</b><br>
+  const hline  = c.hostname ? `<br><span style="color:#6e7681;font-size:10px">${c.hostname}</span>` : '';
+  const torBadge = c.is_tor ? ' <span class="rep-badge rep-tor">TOR</span>' : '';
+  const vpnBadge = c.is_vpn ? ' <span class="rep-badge rep-vpn">VPN</span>' : '';
+  const srcLine  = c.threat_sources && c.threat_sources.length
+    ? `<br><span style="font-size:10px">${sourceBadges(c.threat_sources)}</span>`
+    : '';
+  return `<b>${c.ip}</b>${torBadge}${vpnBadge}${hline}<br>
     <span style="color:#8b949e">:${c.port}</span><br>
     ${c.city ? c.city + ', ' : ''}${c.country || '?'}<br>
     ${c.org || c.isp || ''}
     ${c.process ? '<br><span style="color:#3fb950">⚙ ' + c.process + '</span>' : ''}
-    ${tline}
+    ${tline}${srcLine}
     <button class="trace-btn" onclick="startTrace('${c.ip}')">trace route</button>`;
+}
+
+// ── Peer renderer (shared by live and hist modes) ─────────────────────────────
+
+function _renderPeers(conns, threatEnabled) {
+  Object.values(arcMap).forEach(({ line }) => map.removeLayer(line));
+  arcMap = {};
+
+  const list = document.getElementById('conn-list');
+  list.innerHTML = '';
+  rowMap = {};
+
+  const seen = new Set();
+
+  conns.forEach(c => {
+    if (c.lat == null || c.lon == null) return;
+    seen.add(c.ip);
+    const score  = c.abuse_score ?? null;
+    const lvl    = threatLevel(score);
+    const isTor  = !!c.is_tor;
+    const isVpn  = !!c.is_vpn;
+    const color  = markerColor(c.process, score, isTor, isVpn);
+
+    const icon = peerIcon(color, lvl);
+    if (!peerMarkers[c.ip]) {
+      peerMarkers[c.ip] = L.marker([c.lat, c.lon], { icon }).addTo(map);
+    } else {
+      peerMarkers[c.ip].setIcon(icon);
+    }
+    peerMarkers[c.ip].bindPopup(popupHtml(c));
+    peerMarkers[c.ip].off('contextmenu').on('contextmenu', e => {
+      showCtxMenu(e.originalEvent.clientX, e.originalEvent.clientY, c);
+    });
+
+    if (hostLatLng) {
+      const arcColor  = lvl === 'high' ? '#f85149' : lvl === 'med' ? '#f0883e' : color;
+      const arcOp     = lvl === 'high' ? 0.7 : 0.45;
+      const totalBps  = (c.recv_bps || 0) + (c.send_bps || 0);
+      const arcWeight = arcBwWeight(totalBps);
+      const line      = L.polyline(gcArc(hostLatLng, [c.lat, c.lon]),
+        { color: arcColor, weight: arcWeight, opacity: arcOp,
+          dashArray: lvl === 'high' ? '6,3' : '5,5' }).addTo(map);
+      arcMap[c.ip] = { line, c };
+    }
+
+    // Sidebar row
+    const isBlocked = !!c.is_blocked;
+    const row  = document.createElement('div');
+    row.className = 'conn' + (lvl ? ` threat-${lvl}` : '') + (isBlocked ? ' blocked' : '');
+    const body = document.createElement('div');
+    body.className = 'conn-body';
+    const torHtml = isTor ? '<span class="rep-badge rep-tor">TOR</span>' : '';
+    const vpnHtml = isVpn ? '<span class="rep-badge rep-vpn">VPN</span>' : '';
+    const srcHtml = sourceBadges(c.threat_sources);
+    const containerHtml = c.container ? `<span class="container-badge">🐳 ${c.container}</span>` : '';
+    const agentHtml     = c.agent_label && c.agent_label !== 'local'
+      ? `<span class="agent-badge">${c.agent_label}</span>` : '';
+    const recvFmt = fmtBps(c.recv_bps);
+    const sendFmt = fmtBps(c.send_bps);
+    const bwHtml  = (recvFmt || sendFmt)
+      ? `<div class="bw">${recvFmt ? '↓ ' + recvFmt : ''}${recvFmt && sendFmt ? ' ' : ''}${sendFmt ? '↑ ' + sendFmt : ''}</div>`
+      : '';
+    body.innerHTML = `
+      <div class="ip" style="color:${color}">${c.ip}<span style="color:#484f58">:${c.port}</span>${torHtml}${vpnHtml}${agentHtml}</div>
+      ${c.hostname ? `<div class="hostname">${c.hostname}</div>` : ''}
+      <div class="loc">${c.city ? c.city + ', ' : ''}${c.country || '?'} (${c.countryCode || '?'})</div>
+      ${c.process ? `<div class="proc">⚙ ${c.process}${containerHtml}</div>` : ''}
+      ${c.org ? `<div class="org">&#127970; ${c.org}</div>` : ''}
+      ${bwHtml}
+      ${score !== null ? `<div>${threatLabel(score, c.threat_reports ?? 0)}</div>` : ''}
+      ${srcHtml ? `<div style="margin-top:3px">${srcHtml}</div>` : ''}
+    `;
+
+    const hbtn = document.createElement('button');
+    hbtn.className = 'history-btn';
+    hbtn.title = 'Connection history';
+    hbtn.textContent = '⏱';
+    hbtn.addEventListener('click', e => { e.stopPropagation(); openHistory(c.ip); });
+
+    row.appendChild(body);
+    row.appendChild(hbtn);
+    row.addEventListener('click', () => { map.setView([c.lat, c.lon], 5); peerMarkers[c.ip].openPopup(); });
+    row.addEventListener('contextmenu', e => { e.preventDefault(); showCtxMenu(e.clientX, e.clientY, c); });
+
+    rowMap[c.ip + ':' + c.port + ':' + (c.agent_label || '')] = row;
+    list.appendChild(row);
+  });
+
+  Object.keys(peerMarkers).forEach(ip => {
+    if (!seen.has(ip)) { map.removeLayer(peerMarkers[ip]); delete peerMarkers[ip]; }
+  });
+
+  renderChips(conns, threatEnabled);
+  applyFilter(conns);
 }
 
 // ── Main refresh loop ─────────────────────────────────────────────────────────
 
 async function refresh() {
+  if (histMode) return;
+
   let data;
   try {
     const r = await fetch('/api/connections');
@@ -703,80 +1506,208 @@ async function refresh() {
       `<span class="label">HOST</span> &mdash; ${data.host.query} &mdash; ${data.host.city}, ${data.host.country}`;
   }
 
-  Object.values(arcMap).forEach(({ line }) => map.removeLayer(line));
-  arcMap = {};
-
-  const list = document.getElementById('conn-list');
-  list.innerHTML = '';
-  rowMap = {};
-
-  const seen = new Set();
-
-  data.connections.forEach(c => {
-    seen.add(c.ip);
-    const score = c.abuse_score ?? null;
-    const lvl   = threatLevel(score);
-    const color = markerColor(c.process, score);
-
-    const icon = peerIcon(color, lvl);
-    if (!peerMarkers[c.ip]) {
-      peerMarkers[c.ip] = L.marker([c.lat, c.lon], { icon }).addTo(map);
-    } else {
-      peerMarkers[c.ip].setIcon(icon);
-    }
-    peerMarkers[c.ip].bindPopup(popupHtml(c));
-
-    if (hostLatLng) {
-      const arcColor = lvl === 'high' ? '#f85149' : lvl === 'med' ? '#f0883e' : color;
-      const arcOp    = lvl === 'high' ? 0.7 : 0.45;
-      const line     = L.polyline(gcArc(hostLatLng, [c.lat, c.lon]),
-        { color: arcColor, weight: lvl === 'high' ? 1.6 : 1.2, opacity: arcOp,
-          dashArray: lvl === 'high' ? '6,3' : '5,5' }).addTo(map);
-      arcMap[c.ip] = { line, c };
-    }
-
-    // Sidebar row
-    const row = document.createElement('div');
-    row.className = 'conn' + (lvl ? ` threat-${lvl}` : '');
-
-    const body = document.createElement('div');
-    body.className = 'conn-body';
-    body.innerHTML = `
-      <div class="ip" style="color:${color}">${c.ip}<span style="color:#484f58">:${c.port}</span></div>
-      <div class="loc">${c.city ? c.city + ', ' : ''}${c.country || '?'} (${c.countryCode || '?'})</div>
-      ${c.process ? `<div class="proc">⚙ ${c.process}</div>` : ''}
-      ${c.org ? `<div class="org">🏢 ${c.org}</div>` : ''}
-      ${score !== null ? `<div>${threatLabel(score, c.threat_reports ?? 0)}</div>` : ''}
-    `;
-
-    const hbtn = document.createElement('button');
-    hbtn.className = 'history-btn';
-    hbtn.title = 'Connection history';
-    hbtn.textContent = '⏱';
-    hbtn.addEventListener('click', e => { e.stopPropagation(); openHistory(c.ip); });
-
-    row.appendChild(body);
-    row.appendChild(hbtn);
-    row.addEventListener('click', () => { map.setView([c.lat, c.lon], 5); peerMarkers[c.ip].openPopup(); });
-
-    rowMap[c.ip + ':' + c.port] = row;
-    list.appendChild(row);
-  });
-
-  Object.keys(peerMarkers).forEach(ip => {
-    if (!seen.has(ip)) { map.removeLayer(peerMarkers[ip]); delete peerMarkers[ip]; }
-  });
-
-  renderChips(data.connections, data.threat_enabled);
-  applyFilter(data.connections);
+  _renderPeers(data.connections, data.threat_enabled);
 
   const t = new Date(data.last_updated * 1000);
   const total = data.connections.length;
   document.getElementById('stats').textContent =
     `${total} connection${total !== 1 ? 's' : ''} · ${t.toLocaleTimeString()}`;
+
+  refreshStats();
+  pollAlerts();
 }
 
-// ── Event listeners ───────────────────────────────────────────────────────────
+// ── Stats bar ─────────────────────────────────────────────────────────────────
+
+let statsOpen     = false;
+let lastStatsData = null;
+
+document.getElementById('stats-toggle').addEventListener('click', () => {
+  statsOpen = !statsOpen;
+  document.getElementById('stats-toggle').classList.toggle('open', statsOpen);
+  document.getElementById('stats-cards').classList.toggle('open', statsOpen);
+  if (statsOpen && lastStatsData) renderStatsCards(lastStatsData);
+});
+
+async function refreshStats() {
+  try {
+    const r = await fetch('/api/stats');
+    lastStatsData = await r.json();
+  } catch(e) { return; }
+  const s = lastStatsData;
+  const torPart = s.tor_count > 0 ? ` · ${s.tor_count} Tor` : '';
+  const vpnPart = s.vpn_count > 0 ? ` · ${s.vpn_count} VPN` : '';
+  document.getElementById('stats-summary').textContent =
+    `${s.total_connections} conn · ${s.unique_countries} countries · ${s.unique_ips} IPs${torPart}${vpnPart}`;
+  if (statsOpen) renderStatsCards(s);
+}
+
+function renderStatsCards(s) {
+  const cards = document.getElementById('stats-cards');
+  cards.innerHTML = '';
+
+  const ts = s.threat_summary;
+  const parts = [];
+  if (ts.malicious > 0)  parts.push(`<span style="color:#f85149">&#9760; ${ts.malicious} malicious</span>`);
+  if (ts.suspicious > 0) parts.push(`<span style="color:#f0883e">&#9888; ${ts.suspicious} suspicious</span>`);
+  if (ts.low_risk > 0)   parts.push(`<span style="color:#e3b341">&#9888; ${ts.low_risk} low risk</span>`);
+  if (ts.clean > 0)      parts.push(`<span style="color:#3fb950">${ts.clean} clean</span>`);
+  if (parts.length > 0) {
+    const row = document.createElement('div');
+    row.className = 'stat-row';
+    row.innerHTML = `<span class="stat-row-key">threats</span><span>${parts.join(' &middot; ')}</span>`;
+    cards.appendChild(row);
+  }
+
+  if ((s.tor_count || 0) + (s.vpn_count || 0) > 0) {
+    const row = document.createElement('div');
+    row.className = 'stat-row';
+    const bits = [];
+    if (s.tor_count > 0) bits.push(`<span style="color:#ff7b7b">&#9899; ${s.tor_count} Tor</span>`);
+    if (s.vpn_count > 0) bits.push(`<span style="color:#79c0ff">&#128274; ${s.vpn_count} VPN</span>`);
+    row.innerHTML = `<span class="stat-row-key">rep</span><span>${bits.join(' &middot; ')}</span>`;
+    cards.appendChild(row);
+  }
+
+  if (s.top_processes.length > 0) {
+    const row = document.createElement('div');
+    row.className = 'stat-row';
+    const lbl = document.createElement('span');
+    lbl.className = 'stat-row-key';
+    lbl.textContent = 'procs';
+    row.appendChild(lbl);
+    s.top_processes.forEach(p => {
+      const chip = document.createElement('span');
+      chip.className = 'stat-chip';
+      chip.textContent = `${p.name} \xd7${p.count}`;
+      chip.addEventListener('click', () => {
+        activeProcs.clear(); activeProcs.add(p.name);
+        updateClearBtn();
+        if (lastData) { renderChips(lastData.connections, lastData.threat_enabled); applyFilter(lastData.connections); }
+      });
+      row.appendChild(chip);
+    });
+    cards.appendChild(row);
+  }
+
+  if (s.top_countries.length > 0) {
+    const row = document.createElement('div');
+    row.className = 'stat-row';
+    const lbl = document.createElement('span');
+    lbl.className = 'stat-row-key';
+    lbl.textContent = 'countries';
+    row.appendChild(lbl);
+    s.top_countries.forEach(ct => {
+      const chip = document.createElement('span');
+      chip.className = 'stat-chip';
+      chip.textContent = `${ct.code} \xd7${ct.count}`;
+      chip.addEventListener('click', () => {
+        searchText = ct.code;
+        document.getElementById('search-input').value = ct.code;
+        updateClearBtn();
+        if (lastData) applyFilter(lastData.connections);
+      });
+      row.appendChild(chip);
+    });
+    cards.appendChild(row);
+  }
+
+  if ((s.top_containers || []).length > 0) {
+    const row = document.createElement('div');
+    row.className = 'stat-row';
+    const lbl = document.createElement('span');
+    lbl.className = 'stat-row-key';
+    lbl.textContent = 'docker';
+    row.appendChild(lbl);
+    s.top_containers.forEach(ct => {
+      const chip = document.createElement('span');
+      chip.className = 'stat-chip';
+      chip.textContent = `🐳 ${ct.name} \xd7${ct.count}`;
+      row.appendChild(chip);
+    });
+    cards.appendChild(row);
+  }
+
+  if ((s.bw_leaders || []).length > 0) {
+    const row = document.createElement('div');
+    row.className = 'stat-row';
+    row.innerHTML = `<span class="stat-row-key">bandwidth</span><span style="color:#6e7681">`
+      + s.bw_leaders.slice(0, 3).map(b => {
+          const total = b.recv_bps + b.send_bps;
+          return `${b.ip} <span style="color:#484f58">${fmtBps(total)}</span>`;
+        }).join(' &middot; ')
+      + '</span>';
+    cards.appendChild(row);
+  }
+
+  if ((s.blocked_count || 0) > 0) {
+    const row = document.createElement('div');
+    row.className = 'stat-row';
+    row.innerHTML = `<span class="stat-row-key">blocked</span><span style="color:#f85149">${s.blocked_count} IP${s.blocked_count !== 1 ? 's' : ''}</span>`;
+    cards.appendChild(row);
+  }
+}
+
+// ── Context menu ──────────────────────────────────────────────────────────────
+
+let ctxConn = null;
+
+function showCtxMenu(x, y, conn) {
+  ctxConn = conn;
+  const menu = document.getElementById('ctx-menu');
+  menu.style.left = x + 'px';
+  menu.style.top  = y + 'px';
+  menu.style.display = 'block';
+  const r = menu.getBoundingClientRect();
+  if (r.right  > window.innerWidth)  menu.style.left = (x - r.width)  + 'px';
+  if (r.bottom > window.innerHeight) menu.style.top  = (y - r.height) + 'px';
+}
+
+function hideCtxMenu() {
+  document.getElementById('ctx-menu').style.display = 'none';
+  ctxConn = null;
+}
+
+document.getElementById('ctx-menu').addEventListener('click', async e => {
+  const action = e.target.closest('.ctx-item')?.dataset.action;
+  if (!action) { hideCtxMenu(); return; }
+  const conn = ctxConn;
+  hideCtxMenu();
+  if (!conn && action !== 'blocked-panel') return;
+  switch (action) {
+    case 'traceroute': startTrace(conn.ip); break;
+    case 'threat':
+    case 'history':    openHistory(conn.ip); break;
+    case 'copy':       navigator.clipboard.writeText(conn.ip).catch(() => {}); break;
+    case 'blocked-panel': openBlockedPanel(); break;
+    case 'block': {
+      const verb = conn.is_blocked ? 'Unblock' : 'Block';
+      if (!confirm(`${verb} ${conn.ip}?`)) break;
+      const method = conn.is_blocked ? 'DELETE' : 'POST';
+      try {
+        const r = await fetch(`/api/block/${conn.ip}`, { method });
+        const d = await r.json();
+        if (d.ok) showToast(`${verb}ed ${conn.ip}`, 'info');
+        else showToast(d.error || `${verb} failed`, 'high');
+      } catch(err) {
+        showToast(`${verb} failed`, 'high');
+      }
+      break;
+    }
+  }
+});
+
+document.addEventListener('click',      e => { if (!e.target.closest('#ctx-menu')) hideCtxMenu(); });
+document.addEventListener('keydown',    e => {
+  if (e.key === 'Escape') {
+    hideCtxMenu();
+    closeAlertsPanel();
+    closeRulesModal();
+  }
+});
+document.addEventListener('contextmenu', e => { if (!e.target.closest('#ctx-menu')) hideCtxMenu(); });
+
+// ── Search / filter events ────────────────────────────────────────────────────
 
 document.getElementById('search-input').addEventListener('input', e => {
   searchText = e.target.value;
@@ -785,10 +1716,421 @@ document.getElementById('search-input').addEventListener('input', e => {
 });
 document.getElementById('clear-btn').addEventListener('click', clearAll);
 
+// ── Timeline ──────────────────────────────────────────────────────────────────
+
+let histMode     = false;
+let histTs       = 0;
+let tlData       = [];
+let tlWindow     = 24;
+let playInterval = null;
+let tlHoverX     = -1;
+
+async function loadTimeline() {
+  try {
+    const r = await fetch(`/api/history/timeline?window=${tlWindow}`);
+    tlData = await r.json();
+  } catch(e) { return; }
+  drawTimeline(tlHoverX);
+}
+
+function drawTimeline(cursorX) {
+  const canvas = document.getElementById('tl-canvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const W   = canvas.clientWidth;
+  const H   = canvas.clientHeight;
+  if (!W || !H) return;
+  canvas.width  = W * devicePixelRatio;
+  canvas.height = H * devicePixelRatio;
+  ctx.scale(devicePixelRatio, devicePixelRatio);
+
+  if (!tlData.length) return;
+
+  const maxVal = Math.max(...tlData.map(b => b.count), 1);
+  const barW   = W / tlData.length;
+
+  ctx.clearRect(0, 0, W, H);
+
+  let histBarIdx = -1;
+  if (histMode && histTs > 0) {
+    histBarIdx = tlData.findIndex(b => b.hour_ts === Math.floor(histTs / 3600) * 3600);
+  }
+
+  tlData.forEach((b, i) => {
+    const barH  = Math.max(2, (b.count / maxVal) * (H - 4));
+    const x     = i * barW;
+    const y     = H - barH;
+    const isHist = i === histBarIdx;
+    const alpha  = isHist ? 1.0 : (0.18 + 0.7 * (b.count / maxVal || 0.05));
+    ctx.fillStyle = isHist ? '#58a6ff' : `rgba(88,166,255,${alpha})`;
+    ctx.fillRect(x + 1, y, Math.max(1, barW - 2), barH);
+  });
+
+  if (cursorX >= 0 && cursorX < W) {
+    ctx.strokeStyle = 'rgba(88,166,255,0.55)';
+    ctx.lineWidth   = 1;
+    ctx.setLineDash([2, 3]);
+    ctx.beginPath();
+    ctx.moveTo(cursorX, 0);
+    ctx.lineTo(cursorX, H);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+}
+
+async function enterHistMode(ts) {
+  histMode = true;
+  histTs   = ts;
+  document.getElementById('tl-live').classList.remove('active');
+  document.getElementById('tl-hist-badge').style.display = '';
+  const d = new Date(ts * 1000);
+  document.getElementById('tl-label').textContent =
+    d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+  try {
+    const r     = await fetch(`/api/connections/at/${Math.floor(ts)}?window=300`);
+    const conns = await r.json();
+    _renderPeers(conns, false);
+  } catch(e) {}
+
+  drawTimeline(tlHoverX);
+}
+
+function exitHistMode() {
+  histMode = false;
+  histTs   = 0;
+  if (playInterval) { clearInterval(playInterval); playInterval = null; }
+  document.getElementById('tl-live').classList.add('active');
+  document.getElementById('tl-play').style.display = '';
+  document.getElementById('tl-stop').style.display = 'none';
+  document.getElementById('tl-hist-badge').style.display = 'none';
+  document.getElementById('tl-label').textContent = 'LIVE';
+  drawTimeline(-1);
+  refresh();
+}
+
+function startPlayback() {
+  if (!tlData.length) return;
+  let idx = 0;
+  document.getElementById('tl-play').style.display = 'none';
+  document.getElementById('tl-stop').style.display = '';
+  playInterval = setInterval(async () => {
+    if (idx >= tlData.length) { stopPlayback(); exitHistMode(); return; }
+    await enterHistMode(tlData[idx].hour_ts + 1800);
+    idx++;
+  }, 900);
+}
+
+function stopPlayback() {
+  if (playInterval) { clearInterval(playInterval); playInterval = null; }
+  document.getElementById('tl-play').style.display = '';
+  document.getElementById('tl-stop').style.display = 'none';
+}
+
+const tlCanvas = document.getElementById('tl-canvas');
+
+tlCanvas.addEventListener('mousemove', e => {
+  const rect = tlCanvas.getBoundingClientRect();
+  const x    = e.clientX - rect.left;
+  tlHoverX   = x;
+  drawTimeline(x);
+  if (tlData.length && !histMode) {
+    const idx = Math.min(tlData.length - 1, Math.floor(x / rect.width * tlData.length));
+    const b   = tlData[idx];
+    const d   = new Date(b.hour_ts * 1000);
+    document.getElementById('tl-label').textContent =
+      `${d.getHours().toString().padStart(2,'0')}:00 (${b.count})`;
+  }
+});
+
+tlCanvas.addEventListener('mouseleave', () => {
+  tlHoverX = -1;
+  drawTimeline(-1);
+  if (!histMode) document.getElementById('tl-label').textContent = 'LIVE';
+});
+
+tlCanvas.addEventListener('click', e => {
+  const rect = tlCanvas.getBoundingClientRect();
+  const x    = e.clientX - rect.left;
+  if (!tlData.length) return;
+  const idx = Math.min(tlData.length - 1, Math.floor(x / rect.width * tlData.length));
+  enterHistMode(tlData[idx].hour_ts + 1800);
+});
+
+document.getElementById('tl-live').addEventListener('click', exitHistMode);
+document.getElementById('tl-play').addEventListener('click', startPlayback);
+document.getElementById('tl-stop').addEventListener('click', stopPlayback);
+document.getElementById('tl-window').addEventListener('change', e => {
+  tlWindow = parseInt(e.target.value);
+  loadTimeline();
+});
+
+// ── Alert toasts ──────────────────────────────────────────────────────────────
+
+function showToast(msg, level) {
+  const area = document.getElementById('toast-area');
+  const t    = document.createElement('div');
+  const cls  = level === 'high' ? 'toast-high' : level === 'med' ? 'toast-med' : 'toast-info';
+  t.className = `toast ${cls}`;
+  t.textContent = msg;
+  area.appendChild(t);
+  requestAnimationFrame(() => { requestAnimationFrame(() => t.classList.add('show')); });
+  setTimeout(() => {
+    t.classList.remove('show');
+    setTimeout(() => t.remove(), 300);
+  }, 5000);
+}
+
+function updateAlertBadge(count) {
+  const badge = document.getElementById('alert-badge');
+  if (count > 0) {
+    badge.textContent = count > 99 ? '99+' : String(count);
+    badge.style.display = 'block';
+  } else {
+    badge.style.display = 'none';
+  }
+}
+
+async function pollAlerts() {
+  try {
+    const r    = await fetch('/api/alerts/pending');
+    const evts = await r.json();
+    if (evts && evts.length) {
+      evts.forEach(ev => {
+        const level = ev.rule_type === 'threat_score' ? 'high'
+                    : ev.rule_type === 'country'       ? 'med' : 'info';
+        showToast(ev.msg, level);
+      });
+      const r2  = await fetch('/api/alerts/unread');
+      const obj = await r2.json();
+      updateAlertBadge(obj.count);
+    }
+  } catch(e) {}
+}
+
+// ── Alerts panel ──────────────────────────────────────────────────────────────
+
+function openAlertsPanel() {
+  document.getElementById('history-panel').classList.remove('open');
+  document.getElementById('alerts-panel').classList.add('open');
+  loadAlertEvents();
+}
+
+function closeAlertsPanel() {
+  document.getElementById('alerts-panel').classList.remove('open');
+}
+
+async function loadAlertEvents() {
+  const list = document.getElementById('alerts-list');
+  list.innerHTML = '<div style="padding:12px 14px;font-size:11px;color:#484f58">loading…</div>';
+  try {
+    const r    = await fetch('/api/alerts/events?limit=50');
+    const data = await r.json();
+    // Mark unread as read now that the panel is open
+    fetch('/api/alerts/read', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({})
+    });
+    updateAlertBadge(0);
+    list.innerHTML = '';
+    if (!data.length) {
+      list.innerHTML = '<div style="padding:24px 14px;text-align:center;font-size:11px;color:#3d444d">no alerts yet</div>';
+      return;
+    }
+    data.forEach(ev => {
+      const item = document.createElement('div');
+      item.className = 'alert-item' + (ev.read ? '' : ' unread');
+      const d = new Date(ev.ts * 1000);
+      item.innerHTML = `
+        <div class="alert-type">${ev.rule_type}</div>
+        <div class="alert-msg">${ev.msg}</div>
+        <div class="alert-ts">${d.toLocaleString()}</div>
+      `;
+      list.appendChild(item);
+    });
+  } catch(e) {
+    list.innerHTML = '<div style="padding:12px 14px;font-size:11px;color:#f85149">failed to load</div>';
+  }
+}
+
+document.getElementById('alert-bell').addEventListener('click', openAlertsPanel);
+document.getElementById('alerts-close').addEventListener('click', closeAlertsPanel);
+document.getElementById('alerts-mark-read').addEventListener('click', () => {
+  fetch('/api/alerts/read', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({})
+  }).then(() => updateAlertBadge(0));
+  document.querySelectorAll('.alert-item.unread').forEach(el => el.classList.remove('unread'));
+});
+document.getElementById('alerts-rules-btn').addEventListener('click', () => {
+  closeAlertsPanel();
+  openRulesModal();
+});
+
+// ── Rules modal ───────────────────────────────────────────────────────────────
+
+function openRulesModal() {
+  document.getElementById('rules-modal').classList.add('open');
+  loadRules();
+}
+
+function closeRulesModal() {
+  document.getElementById('rules-modal').classList.remove('open');
+}
+
+async function loadRules() {
+  const list = document.getElementById('rules-list');
+  list.innerHTML = '<div style="padding:14px 16px;font-size:11px;color:#484f58">loading…</div>';
+  try {
+    const r    = await fetch('/api/alerts/rules');
+    const data = await r.json();
+    list.innerHTML = '';
+    if (!data.length) {
+      list.innerHTML = '<div style="padding:20px 16px;text-align:center;font-size:11px;color:#3d444d">no rules defined</div>';
+      return;
+    }
+    data.forEach(rule => {
+      let cond = {};
+      try { cond = JSON.parse(rule.condition); } catch(e) {}
+      let desc = rule.rule_type;
+      if      (rule.rule_type === 'country'      && cond.code)       desc = `Country = ${cond.code}`;
+      else if (rule.rule_type === 'threat_score' && cond.min_score != null) desc = `Threat score ≥ ${cond.min_score}`;
+      else if (rule.rule_type === 'new_ip')      desc = 'New IP seen';
+      else if (rule.rule_type === 'new_process') desc = 'New process seen';
+
+      const item = document.createElement('div');
+      item.className = 'rule-item';
+      item.innerHTML = `
+        <button class="rule-toggle ${rule.enabled ? 'on' : 'off'}" data-rid="${rule.id}" data-enabled="${rule.enabled}" title="Toggle"></button>
+        <div class="rule-desc">
+          <div>${desc}</div>
+          <div class="rule-type-tag">${rule.rule_type}</div>
+        </div>
+        <button class="rule-delete" data-rid="${rule.id}" title="Delete">&#10005;</button>
+      `;
+      list.appendChild(item);
+    });
+  } catch(e) {
+    list.innerHTML = '<div style="padding:14px 16px;font-size:11px;color:#f85149">failed to load</div>';
+  }
+}
+
+document.getElementById('rules-list').addEventListener('click', async e => {
+  const toggle = e.target.closest('.rule-toggle');
+  const del    = e.target.closest('.rule-delete');
+  if (toggle) {
+    const rid     = parseInt(toggle.dataset.rid);
+    const enabled = parseInt(toggle.dataset.enabled) === 1 ? 0 : 1;
+    await fetch(`/api/alerts/rules/${rid}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled })
+    });
+    loadRules();
+  } else if (del) {
+    const rid = parseInt(del.dataset.rid);
+    if (!confirm('Delete this rule?')) return;
+    await fetch(`/api/alerts/rules/${rid}`, { method: 'DELETE' });
+    loadRules();
+  }
+});
+
+document.getElementById('rules-add-btn').addEventListener('click', async () => {
+  const type = document.getElementById('rules-type-select').value;
+  const val  = document.getElementById('rules-cond-val').value.trim();
+  let cond = {};
+  if      (type === 'country')     cond = { code: val.toUpperCase() || 'XX' };
+  else if (type === 'threat_score') cond = { min_score: parseInt(val) || 75 };
+  await fetch('/api/alerts/rules', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ rule_type: type, condition: cond, action: { type: 'desktop' } })
+  });
+  document.getElementById('rules-cond-val').value = '';
+  loadRules();
+});
+
+document.getElementById('rules-type-select').addEventListener('change', e => {
+  const input = document.getElementById('rules-cond-val');
+  switch (e.target.value) {
+    case 'country':      input.placeholder = 'CC (e.g. CN)';          break;
+    case 'threat_score': input.placeholder = 'min score (e.g. 75)';   break;
+    default:             input.placeholder = '(no value needed)';     break;
+  }
+});
+
+document.getElementById('rules-close').addEventListener('click', closeRulesModal);
+document.getElementById('rules-modal').addEventListener('click', e => {
+  if (e.target === document.getElementById('rules-modal')) closeRulesModal();
+});
+
+// ── Blocked IPs panel ─────────────────────────────────────────────────────────
+
+function openBlockedPanel() {
+  document.getElementById('history-panel').classList.remove('open');
+  document.getElementById('blocked-panel').classList.add('open');
+  loadBlockedIps();
+}
+
+function closeBlockedPanel() {
+  document.getElementById('blocked-panel').classList.remove('open');
+}
+
+async function loadBlockedIps() {
+  const list = document.getElementById('blocked-list');
+  list.innerHTML = '<div style="padding:12px 14px;font-size:11px;color:#484f58">loading…</div>';
+  try {
+    const r    = await fetch('/api/firewall/status');
+    const data = await r.json();
+    const ips  = data.blocked || [];
+    list.innerHTML = '';
+    if (!ips.length) {
+      list.innerHTML = '<div style="padding:24px 14px;text-align:center;font-size:11px;color:#3d444d">no blocked IPs</div>';
+      return;
+    }
+    ips.forEach(entry => {
+      const item = document.createElement('div');
+      item.className = 'blocked-item';
+      const d = new Date(entry.blocked_at * 1000);
+      item.innerHTML = `
+        <div class="blocked-item-info">
+          <div class="blocked-ip">${entry.ip}</div>
+          <div class="blocked-ts">blocked ${d.toLocaleString()}</div>
+        </div>
+        <button class="unblock-btn" data-ip="${entry.ip}">Unblock</button>
+      `;
+      list.appendChild(item);
+    });
+  } catch(e) {
+    list.innerHTML = '<div style="padding:12px 14px;font-size:11px;color:#f85149">failed to load</div>';
+  }
+}
+
+document.getElementById('blocked-close').addEventListener('click', closeBlockedPanel);
+
+document.getElementById('blocked-list').addEventListener('click', async e => {
+  const btn = e.target.closest('.unblock-btn');
+  if (!btn) return;
+  const ip = btn.dataset.ip;
+  if (!confirm(`Unblock ${ip}?`)) return;
+  try {
+    const r = await fetch(`/api/block/${ip}`, { method: 'DELETE' });
+    const d = await r.json();
+    if (d.ok) { showToast(`Unblocked ${ip}`, 'info'); loadBlockedIps(); }
+    else showToast(d.error || 'Unblock failed', 'high');
+  } catch(err) {
+    showToast('Unblock failed', 'high');
+  }
+});
+
 // ── Boot ──────────────────────────────────────────────────────────────────────
 
 refresh();
 setInterval(refresh, 5000);
+loadTimeline();
+setInterval(loadTimeline, 60000);
 </script>
 </body>
 </html>

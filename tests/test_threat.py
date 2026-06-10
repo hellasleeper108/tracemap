@@ -81,3 +81,84 @@ class TestCheckIP(unittest.TestCase):
             r = threat._check_ip("1.2.3.4", "key")
         self.assertEqual(r["abuse_score"], 0)
         self.assertEqual(r["reports"], 0)
+
+
+class TestVtEnabled(unittest.TestCase):
+    def test_disabled_without_key(self):
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertFalse(threat.vt_enabled())
+
+    def test_enabled_with_key(self):
+        with patch.dict(os.environ, {"VIRUSTOTAL_KEY": "vt-abc123"}, clear=True):
+            self.assertTrue(threat.vt_enabled())
+
+
+class TestShodanEnabled(unittest.TestCase):
+    def test_disabled_without_key(self):
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertFalse(threat.shodan_enabled())
+
+    def test_enabled_with_key(self):
+        with patch.dict(os.environ, {"SHODAN_KEY": "sh-abc123"}, clear=True):
+            self.assertTrue(threat.shodan_enabled())
+
+
+class TestCheckVirusTotal(unittest.TestCase):
+    def test_parses_vt_response(self):
+        payload = {
+            "data": {
+                "attributes": {
+                    "last_analysis_stats": {
+                        "malicious": 3,
+                        "suspicious": 1,
+                        "undetected": 60,
+                        "harmless": 10,
+                    }
+                }
+            }
+        }
+        with patch("urllib.request.urlopen", return_value=_mock_response(payload)):
+            r = threat._check_virustotal("1.2.3.4", "key")
+        self.assertIsNotNone(r)
+        self.assertIn("score", r)
+        self.assertIn("malicious", r)
+        self.assertIn("suspicious", r)
+        self.assertIn("total", r)
+        self.assertEqual(r["malicious"], 3)
+        self.assertEqual(r["suspicious"], 1)
+
+    def test_returns_none_on_url_error(self):
+        with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("down")):
+            r = threat._check_virustotal("1.2.3.4", "key")
+        self.assertIsNone(r)
+
+    def test_returns_none_on_429_after_sleep(self):
+        err = urllib.error.HTTPError(None, 429, "Too Many Requests", {}, None)
+        with patch("urllib.request.urlopen", side_effect=err), \
+             patch("time.sleep") as mock_sleep:
+            r = threat._check_virustotal("1.2.3.4", "key")
+        self.assertIsNone(r)
+        mock_sleep.assert_called_once_with(60)
+
+
+class TestCheckShodan(unittest.TestCase):
+    def test_parses_shodan_response(self):
+        payload = {
+            "tags": ["malware"],
+            "vulns": {"CVE-1": {}, "CVE-2": {}},
+            "ports": [80, 443],
+        }
+        with patch("urllib.request.urlopen", return_value=_mock_response(payload)):
+            r = threat._check_shodan("1.2.3.4", "key")
+        self.assertIsNotNone(r)
+        self.assertGreater(r["score"], 0)
+        self.assertIn("tags", r)
+        self.assertEqual(r["vulns"], 2)
+        self.assertIn("ports", r)
+
+    def test_empty_response_gives_score_zero(self):
+        payload = {"tags": [], "ports": [80]}
+        with patch("urllib.request.urlopen", return_value=_mock_response(payload)):
+            r = threat._check_shodan("1.2.3.4", "key")
+        self.assertIsNotNone(r)
+        self.assertEqual(r["score"], 0)
