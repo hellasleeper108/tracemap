@@ -219,3 +219,129 @@ class TestGetStateHostname(unittest.TestCase):
             self.assertEqual(state["connections"][0]["hostname"], "example.com")
         finally:
             collector._connections = original
+
+
+# ── Bandwidth helpers ─────────────────────────────────────────────────────────
+
+from collector import _parse_bw_info, _compute_bw, _extract_pid
+
+
+class TestParseBwInfo(unittest.TestCase):
+    def test_bytes_received_parsed(self):
+        line = "\t bytes_received:12345 bytes_sent:0 send_queue:0 cwnd:10"
+        recv, sent = _parse_bw_info(line)
+        self.assertEqual(recv, 12345)
+
+    def test_bytes_sent_parsed(self):
+        line = "\t bytes_received:100 bytes_sent:500"
+        recv, sent = _parse_bw_info(line)
+        self.assertEqual(sent, 500)
+
+    def test_bytes_acked_fallback(self):
+        line = "\t bytes_received:100 bytes_acked:300"
+        recv, sent = _parse_bw_info(line)
+        self.assertEqual(sent, 300)
+
+    def test_empty_line_returns_zeros(self):
+        recv, sent = _parse_bw_info("")
+        self.assertEqual(recv, 0)
+        self.assertEqual(sent, 0)
+
+    def test_bytes_sent_preferred_over_acked(self):
+        line = "\t bytes_received:0 bytes_sent:200 bytes_acked:100"
+        recv, sent = _parse_bw_info(line)
+        self.assertEqual(sent, 200)
+
+
+class TestComputeBw(unittest.TestCase):
+    def setUp(self):
+        import collector
+        collector._bw_state.clear()
+
+    def tearDown(self):
+        import collector
+        collector._bw_state.clear()
+
+    def test_first_call_returns_zero_bps(self):
+        recv_bps, send_bps = _compute_bw(("1.2.3.4", "443", "5000"), 1000, 500, 1000.0)
+        self.assertEqual(recv_bps, 0.0)
+        self.assertEqual(send_bps, 0.0)
+
+    def test_second_call_computes_delta(self):
+        key = ("1.2.3.4", "443", "5000")
+        _compute_bw(key, 0, 0, 1000.0)
+        recv_bps, send_bps = _compute_bw(key, 10000, 5000, 1010.0)
+        self.assertAlmostEqual(recv_bps, 1000.0, places=1)
+        self.assertAlmostEqual(send_bps, 500.0, places=1)
+
+    def test_negative_bytes_recv_returns_zero(self):
+        key = ("1.2.3.4", "443", "5000")
+        _compute_bw(key, 1000, 0, 1000.0)
+        # bytes_recv went backwards (shouldn't happen normally)
+        recv_bps, send_bps = _compute_bw(key, 500, 0, 1010.0)
+        self.assertEqual(recv_bps, 0.0)
+
+
+class TestExtractPid(unittest.TestCase):
+    def test_extracts_pid(self):
+        field = 'users:(("chrome",pid=1234,fd=5))'
+        self.assertEqual(_extract_pid(field), 1234)
+
+    def test_returns_none_when_no_pid(self):
+        self.assertIsNone(_extract_pid(""))
+
+    def test_returns_none_for_unrelated_text(self):
+        self.assertIsNone(_extract_pid("some text without pid"))
+
+
+# ── Docker helpers ────────────────────────────────────────────────────────────
+
+from collector import _get_container_id, _get_container_name, _resolve_container
+
+
+class TestGetContainerId(unittest.TestCase):
+    def test_finds_container_id(self):
+        cgroup_content = "12:cpu:/docker/abc123def456789012345678901234567890abcdef12345678\n"
+        mock_open = unittest.mock.mock_open(read_data=cgroup_content)
+        with patch("builtins.open", mock_open):
+            cid = _get_container_id(1234)
+        self.assertEqual(cid, "abc123def456")
+
+    def test_returns_none_when_no_docker(self):
+        cgroup_content = "12:cpu:/system.slice/sshd.service\n"
+        mock_open = unittest.mock.mock_open(read_data=cgroup_content)
+        with patch("builtins.open", mock_open):
+            cid = _get_container_id(1234)
+        self.assertIsNone(cid)
+
+    def test_returns_none_on_oserror(self):
+        with patch("builtins.open", side_effect=OSError):
+            cid = _get_container_id(9999)
+        self.assertIsNone(cid)
+
+
+class TestResolveContainer(unittest.TestCase):
+    def test_returns_empty_when_pid_none(self):
+        cid, cname = _resolve_container(None)
+        self.assertEqual(cid, "")
+        self.assertEqual(cname, "")
+
+    def test_returns_empty_when_no_container_id(self):
+        with patch("collector._get_container_id", return_value=None):
+            cid, cname = _resolve_container(1234)
+        self.assertEqual(cid, "")
+        self.assertEqual(cname, "")
+
+    def test_returns_name_from_docker_socket(self):
+        with patch("collector._get_container_id", return_value="abc123def456"), \
+             patch("collector._get_container_name", return_value="my-container"):
+            cid, cname = _resolve_container(1234)
+        self.assertEqual(cid, "abc123def456")
+        self.assertEqual(cname, "my-container")
+
+    def test_handles_missing_container_name(self):
+        with patch("collector._get_container_id", return_value="abc123def456"), \
+             patch("collector._get_container_name", return_value=None):
+            cid, cname = _resolve_container(1234)
+        self.assertEqual(cid, "abc123def456")
+        self.assertEqual(cname, "")

@@ -703,6 +703,99 @@ body {
   transition: background 0.12s;
 }
 #rules-add-btn:hover { background: rgba(56,139,253,0.18); }
+
+/* ── Bandwidth display ── */
+.conn .bw { font-size: 10px; color: #3d444d; margin-top: 1px; }
+
+/* ── Blocked rows ── */
+.conn.blocked .ip { text-decoration: line-through; color: #484f58 !important; }
+.conn.blocked { opacity: 0.55; }
+
+/* ── Container badge ── */
+.container-badge {
+  display: inline-block;
+  font-size: 9px;
+  padding: 1px 4px;
+  border-radius: 2px;
+  margin-left: 4px;
+  background: rgba(88,166,255,0.1);
+  border: 1px solid rgba(88,166,255,0.2);
+  color: #79c0ff;
+  vertical-align: middle;
+}
+
+/* ── Agent badge ── */
+.agent-badge {
+  display: inline-block;
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 2px;
+  margin-left: 4px;
+  background: rgba(63,185,80,0.1);
+  border: 1px solid rgba(63,185,80,0.2);
+  color: #56d364;
+  vertical-align: middle;
+}
+
+/* ── Blocked / container filter chips ── */
+.blocked-chip        { border-color: rgba(248,81,73,0.4);  color: #f85149; background: rgba(248,81,73,0.05); }
+.blocked-chip.active { background: rgba(248,81,73,0.12);  border-color: #f85149; }
+.blocked-chip:hover  { border-color: #f85149; }
+.container-chip        { border-color: rgba(88,166,255,0.35); color: #79c0ff; background: rgba(88,166,255,0.04); }
+.container-chip.active { background: rgba(88,166,255,0.12); border-color: #79c0ff; }
+.container-chip:hover  { border-color: #79c0ff; }
+
+/* ── Blocked IPs panel ── */
+#blocked-panel {
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  background: #0d1117;
+  border-top: 1px solid #30363d;
+  transform: translateY(100%);
+  transition: transform 0.2s ease;
+  z-index: 11;
+  display: flex;
+  flex-direction: column;
+  max-height: 55%;
+}
+#blocked-panel.open { transform: translateY(0); }
+#blocked-hdr {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px 8px;
+  border-bottom: 1px solid #21262d;
+  flex-shrink: 0;
+}
+#blocked-title { font-size: 12px; font-weight: bold; color: #f85149; }
+#blocked-close { background: none; border: none; color: #484f58; cursor: pointer; font-size: 16px; padding: 0; line-height: 1; }
+#blocked-close:hover { color: #c9d1d9; }
+#blocked-list { flex: 1; overflow-y: auto; }
+.blocked-item {
+  padding: 7px 14px;
+  border-bottom: 1px solid #1c2128;
+  font-size: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.blocked-item-info { flex: 1; min-width: 0; }
+.blocked-item .blocked-ip { color: #f85149; }
+.blocked-item .blocked-ts { font-size: 10px; color: #3d444d; margin-top: 2px; }
+.unblock-btn {
+  background: none;
+  border: 1px solid #30363d;
+  border-radius: 3px;
+  color: #6e7681;
+  cursor: pointer;
+  font-size: 10px;
+  font-family: inherit;
+  padding: 2px 7px;
+  flex-shrink: 0;
+  transition: border-color 0.12s, color 0.12s;
+}
+.unblock-btn:hover { border-color: #f85149; color: #f85149; }
 </style>
 </head>
 <body>
@@ -784,6 +877,15 @@ body {
     <div id="history-footer"></div>
   </div>
 
+  <!-- Blocked IPs panel (slides up from bottom) -->
+  <div id="blocked-panel">
+    <div id="blocked-hdr">
+      <span id="blocked-title">&#8856; Blocked IPs</span>
+      <button id="blocked-close">&times;</button>
+    </div>
+    <div id="blocked-list"></div>
+  </div>
+
   <!-- Alerts panel (slides up from bottom, z-index above history) -->
   <div id="alerts-panel">
     <div id="alerts-hdr">
@@ -832,7 +934,8 @@ body {
   <div class="ctx-item" data-action="copy">&#8984; Copy IP</div>
   <div class="ctx-item" data-action="history">&#9202; Connection History</div>
   <div class="ctx-sep"></div>
-  <div class="ctx-item ctx-disabled" data-action="block">&#8856; Block IP<span class="ctx-tag">(Phase 3)</span></div>
+  <div class="ctx-item" data-action="block">&#8856; Block IP</div>
+  <div class="ctx-item" data-action="blocked-panel">&#9632; Blocked IPs&hellip;</div>
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -891,6 +994,20 @@ function hexToRgba(hex, a) {
   return `rgba(${n>>16},${(n>>8)&255},${n&255},${a})`;
 }
 
+// ── Bandwidth helpers ─────────────────────────────────────────────────────────
+
+function fmtBps(bps) {
+  if (!bps || bps < 1) return '';
+  if (bps < 1024)      return `${Math.round(bps)} B/s`;
+  if (bps < 1048576)   return `${(bps / 1024).toFixed(1)} KB/s`;
+  return `${(bps / 1048576).toFixed(2)} MB/s`;
+}
+
+function arcBwWeight(bps) {
+  if (!bps || bps < 100) return 1.2;
+  return Math.min(8, 1.2 + Math.log10(bps / 100) * 1.8);
+}
+
 // ── Source badges ─────────────────────────────────────────────────────────────
 
 function sourceBadges(sources) {
@@ -915,38 +1032,44 @@ function procColor(proc) {
 
 // ── Filter state ──────────────────────────────────────────────────────────────
 
-let searchText  = '';
-let activeProcs = new Set();
-let threatOnly  = false;
-let torOnly     = false;
-let vpnOnly     = false;
-let lastData    = null;
+let searchText     = '';
+let activeProcs    = new Set();
+let threatOnly     = false;
+let torOnly        = false;
+let vpnOnly        = false;
+let containerOnly  = false;
+let blockedOnly    = false;
+let lastData       = null;
 
 function matchesFilter(c) {
   if (searchText) {
     const q = searchText.toLowerCase();
-    const hay = [c.ip, c.city, c.country, c.countryCode, c.org, c.isp, c.process, c.hostname]
+    const hay = [c.ip, c.city, c.country, c.countryCode, c.org, c.isp, c.process, c.hostname, c.container, c.agent_label]
       .filter(Boolean).join(' ').toLowerCase();
     if (!hay.includes(q)) return false;
   }
   if (activeProcs.size > 0 && !activeProcs.has(c.process || '')) return false;
-  if (threatOnly && !(c.abuse_score > 0)) return false;
-  if (torOnly && !c.is_tor) return false;
-  if (vpnOnly && !c.is_vpn) return false;
+  if (threatOnly     && !(c.abuse_score > 0)) return false;
+  if (torOnly        && !c.is_tor)            return false;
+  if (vpnOnly        && !c.is_vpn)            return false;
+  if (containerOnly  && !c.container)         return false;
+  if (blockedOnly    && !c.is_blocked)        return false;
   return true;
 }
 
 function updateClearBtn() {
-  const on = searchText !== '' || activeProcs.size > 0 || threatOnly || torOnly || vpnOnly;
+  const on = searchText !== '' || activeProcs.size > 0 || threatOnly || torOnly || vpnOnly || containerOnly || blockedOnly;
   document.getElementById('clear-btn').style.display = on ? 'block' : 'none';
 }
 
 function clearAll() {
-  searchText = '';
+  searchText    = '';
   activeProcs.clear();
-  threatOnly = false;
-  torOnly    = false;
-  vpnOnly    = false;
+  threatOnly    = false;
+  torOnly       = false;
+  vpnOnly       = false;
+  containerOnly = false;
+  blockedOnly   = false;
   document.getElementById('search-input').value = '';
   updateClearBtn();
   if (lastData) { renderChips(lastData.connections, lastData.threat_enabled); applyFilter(lastData.connections); }
@@ -1025,6 +1148,32 @@ function renderChips(connections, threatEnabled) {
     };
     container.appendChild(chip);
   }
+
+  const hasContainers = connections.some(c => c.container);
+  if (hasContainers) {
+    const chip = document.createElement('span');
+    chip.className = 'chip container-chip' + (containerOnly ? ' active' : '');
+    chip.textContent = '🐳 docker';
+    chip.onclick = () => {
+      containerOnly = !containerOnly;
+      updateClearBtn();
+      if (lastData) { renderChips(lastData.connections, lastData.threat_enabled); applyFilter(lastData.connections); }
+    };
+    container.appendChild(chip);
+  }
+
+  const hasBlocked = connections.some(c => c.is_blocked);
+  if (hasBlocked) {
+    const chip = document.createElement('span');
+    chip.className = 'chip blocked-chip' + (blockedOnly ? ' active' : '');
+    chip.textContent = '衖 blocked';
+    chip.onclick = () => {
+      blockedOnly = !blockedOnly;
+      updateClearBtn();
+      if (lastData) { renderChips(lastData.connections, lastData.threat_enabled); applyFilter(lastData.connections); }
+    };
+    container.appendChild(chip);
+  }
 }
 
 function applyFilter(connections) {
@@ -1034,7 +1183,7 @@ function applyFilter(connections) {
     const m = matchesFilter(c);
     if (m) { matchCount++; ipMatched[c.ip] = true; }
     else if (ipMatched[c.ip] === undefined) ipMatched[c.ip] = false;
-    const row = rowMap[c.ip + ':' + c.port];
+    const row = rowMap[c.ip + ':' + c.port + ':' + (c.agent_label || '')];
     if (row) row.style.display = m ? '' : 'none';
   });
   Object.entries(ipMatched).forEach(([ip, matched]) => {
@@ -1273,28 +1422,40 @@ function _renderPeers(conns, threatEnabled) {
     });
 
     if (hostLatLng) {
-      const arcColor = lvl === 'high' ? '#f85149' : lvl === 'med' ? '#f0883e' : color;
-      const arcOp    = lvl === 'high' ? 0.7 : 0.45;
-      const line     = L.polyline(gcArc(hostLatLng, [c.lat, c.lon]),
-        { color: arcColor, weight: lvl === 'high' ? 1.6 : 1.2, opacity: arcOp,
+      const arcColor  = lvl === 'high' ? '#f85149' : lvl === 'med' ? '#f0883e' : color;
+      const arcOp     = lvl === 'high' ? 0.7 : 0.45;
+      const totalBps  = (c.recv_bps || 0) + (c.send_bps || 0);
+      const arcWeight = arcBwWeight(totalBps);
+      const line      = L.polyline(gcArc(hostLatLng, [c.lat, c.lon]),
+        { color: arcColor, weight: arcWeight, opacity: arcOp,
           dashArray: lvl === 'high' ? '6,3' : '5,5' }).addTo(map);
       arcMap[c.ip] = { line, c };
     }
 
     // Sidebar row
+    const isBlocked = !!c.is_blocked;
     const row  = document.createElement('div');
-    row.className = 'conn' + (lvl ? ` threat-${lvl}` : '');
+    row.className = 'conn' + (lvl ? ` threat-${lvl}` : '') + (isBlocked ? ' blocked' : '');
     const body = document.createElement('div');
     body.className = 'conn-body';
     const torHtml = isTor ? '<span class="rep-badge rep-tor">TOR</span>' : '';
     const vpnHtml = isVpn ? '<span class="rep-badge rep-vpn">VPN</span>' : '';
     const srcHtml = sourceBadges(c.threat_sources);
+    const containerHtml = c.container ? `<span class="container-badge">🐳 ${c.container}</span>` : '';
+    const agentHtml     = c.agent_label && c.agent_label !== 'local'
+      ? `<span class="agent-badge">${c.agent_label}</span>` : '';
+    const recvFmt = fmtBps(c.recv_bps);
+    const sendFmt = fmtBps(c.send_bps);
+    const bwHtml  = (recvFmt || sendFmt)
+      ? `<div class="bw">${recvFmt ? '↓ ' + recvFmt : ''}${recvFmt && sendFmt ? ' ' : ''}${sendFmt ? '↑ ' + sendFmt : ''}</div>`
+      : '';
     body.innerHTML = `
-      <div class="ip" style="color:${color}">${c.ip}<span style="color:#484f58">:${c.port}</span>${torHtml}${vpnHtml}</div>
+      <div class="ip" style="color:${color}">${c.ip}<span style="color:#484f58">:${c.port}</span>${torHtml}${vpnHtml}${agentHtml}</div>
       ${c.hostname ? `<div class="hostname">${c.hostname}</div>` : ''}
       <div class="loc">${c.city ? c.city + ', ' : ''}${c.country || '?'} (${c.countryCode || '?'})</div>
-      ${c.process ? `<div class="proc">⚙ ${c.process}</div>` : ''}
+      ${c.process ? `<div class="proc">⚙ ${c.process}${containerHtml}</div>` : ''}
       ${c.org ? `<div class="org">&#127970; ${c.org}</div>` : ''}
+      ${bwHtml}
       ${score !== null ? `<div>${threatLabel(score, c.threat_reports ?? 0)}</div>` : ''}
       ${srcHtml ? `<div style="margin-top:3px">${srcHtml}</div>` : ''}
     `;
@@ -1310,7 +1471,7 @@ function _renderPeers(conns, threatEnabled) {
     row.addEventListener('click', () => { map.setView([c.lat, c.lon], 5); peerMarkers[c.ip].openPopup(); });
     row.addEventListener('contextmenu', e => { e.preventDefault(); showCtxMenu(e.clientX, e.clientY, c); });
 
-    rowMap[c.ip + ':' + c.port] = row;
+    rowMap[c.ip + ':' + c.port + ':' + (c.agent_label || '')] = row;
     list.appendChild(row);
   });
 
@@ -1450,6 +1611,41 @@ function renderStatsCards(s) {
     });
     cards.appendChild(row);
   }
+
+  if ((s.top_containers || []).length > 0) {
+    const row = document.createElement('div');
+    row.className = 'stat-row';
+    const lbl = document.createElement('span');
+    lbl.className = 'stat-row-key';
+    lbl.textContent = 'docker';
+    row.appendChild(lbl);
+    s.top_containers.forEach(ct => {
+      const chip = document.createElement('span');
+      chip.className = 'stat-chip';
+      chip.textContent = `🐳 ${ct.name} \xd7${ct.count}`;
+      row.appendChild(chip);
+    });
+    cards.appendChild(row);
+  }
+
+  if ((s.bw_leaders || []).length > 0) {
+    const row = document.createElement('div');
+    row.className = 'stat-row';
+    row.innerHTML = `<span class="stat-row-key">bandwidth</span><span style="color:#6e7681">`
+      + s.bw_leaders.slice(0, 3).map(b => {
+          const total = b.recv_bps + b.send_bps;
+          return `${b.ip} <span style="color:#484f58">${fmtBps(total)}</span>`;
+        }).join(' &middot; ')
+      + '</span>';
+    cards.appendChild(row);
+  }
+
+  if ((s.blocked_count || 0) > 0) {
+    const row = document.createElement('div');
+    row.className = 'stat-row';
+    row.innerHTML = `<span class="stat-row-key">blocked</span><span style="color:#f85149">${s.blocked_count} IP${s.blocked_count !== 1 ? 's' : ''}</span>`;
+    cards.appendChild(row);
+  }
 }
 
 // ── Context menu ──────────────────────────────────────────────────────────────
@@ -1472,16 +1668,33 @@ function hideCtxMenu() {
   ctxConn = null;
 }
 
-document.getElementById('ctx-menu').addEventListener('click', e => {
+document.getElementById('ctx-menu').addEventListener('click', async e => {
   const action = e.target.closest('.ctx-item')?.dataset.action;
-  if (!action || !ctxConn || action === 'block') { hideCtxMenu(); return; }
-  switch (action) {
-    case 'traceroute': startTrace(ctxConn.ip);   break;
-    case 'threat':
-    case 'history':    openHistory(ctxConn.ip);  break;
-    case 'copy':       navigator.clipboard.writeText(ctxConn.ip).catch(() => {}); break;
-  }
+  if (!action) { hideCtxMenu(); return; }
+  const conn = ctxConn;
   hideCtxMenu();
+  if (!conn && action !== 'blocked-panel') return;
+  switch (action) {
+    case 'traceroute': startTrace(conn.ip); break;
+    case 'threat':
+    case 'history':    openHistory(conn.ip); break;
+    case 'copy':       navigator.clipboard.writeText(conn.ip).catch(() => {}); break;
+    case 'blocked-panel': openBlockedPanel(); break;
+    case 'block': {
+      const verb = conn.is_blocked ? 'Unblock' : 'Block';
+      if (!confirm(`${verb} ${conn.ip}?`)) break;
+      const method = conn.is_blocked ? 'DELETE' : 'POST';
+      try {
+        const r = await fetch(`/api/block/${conn.ip}`, { method });
+        const d = await r.json();
+        if (d.ok) showToast(`${verb}ed ${conn.ip}`, 'info');
+        else showToast(d.error || `${verb} failed`, 'high');
+      } catch(err) {
+        showToast(`${verb} failed`, 'high');
+      }
+      break;
+    }
+  }
 });
 
 document.addEventListener('click',      e => { if (!e.target.closest('#ctx-menu')) hideCtxMenu(); });
@@ -1851,6 +2064,65 @@ document.getElementById('rules-type-select').addEventListener('change', e => {
 document.getElementById('rules-close').addEventListener('click', closeRulesModal);
 document.getElementById('rules-modal').addEventListener('click', e => {
   if (e.target === document.getElementById('rules-modal')) closeRulesModal();
+});
+
+// ── Blocked IPs panel ─────────────────────────────────────────────────────────
+
+function openBlockedPanel() {
+  document.getElementById('history-panel').classList.remove('open');
+  document.getElementById('blocked-panel').classList.add('open');
+  loadBlockedIps();
+}
+
+function closeBlockedPanel() {
+  document.getElementById('blocked-panel').classList.remove('open');
+}
+
+async function loadBlockedIps() {
+  const list = document.getElementById('blocked-list');
+  list.innerHTML = '<div style="padding:12px 14px;font-size:11px;color:#484f58">loading…</div>';
+  try {
+    const r    = await fetch('/api/firewall/status');
+    const data = await r.json();
+    const ips  = data.blocked || [];
+    list.innerHTML = '';
+    if (!ips.length) {
+      list.innerHTML = '<div style="padding:24px 14px;text-align:center;font-size:11px;color:#3d444d">no blocked IPs</div>';
+      return;
+    }
+    ips.forEach(entry => {
+      const item = document.createElement('div');
+      item.className = 'blocked-item';
+      const d = new Date(entry.blocked_at * 1000);
+      item.innerHTML = `
+        <div class="blocked-item-info">
+          <div class="blocked-ip">${entry.ip}</div>
+          <div class="blocked-ts">blocked ${d.toLocaleString()}</div>
+        </div>
+        <button class="unblock-btn" data-ip="${entry.ip}">Unblock</button>
+      `;
+      list.appendChild(item);
+    });
+  } catch(e) {
+    list.innerHTML = '<div style="padding:12px 14px;font-size:11px;color:#f85149">failed to load</div>';
+  }
+}
+
+document.getElementById('blocked-close').addEventListener('click', closeBlockedPanel);
+
+document.getElementById('blocked-list').addEventListener('click', async e => {
+  const btn = e.target.closest('.unblock-btn');
+  if (!btn) return;
+  const ip = btn.dataset.ip;
+  if (!confirm(`Unblock ${ip}?`)) return;
+  try {
+    const r = await fetch(`/api/block/${ip}`, { method: 'DELETE' });
+    const d = await r.json();
+    if (d.ok) { showToast(`Unblocked ${ip}`, 'info'); loadBlockedIps(); }
+    else showToast(d.error || 'Unblock failed', 'high');
+  } catch(err) {
+    showToast('Unblock failed', 'high');
+  }
 });
 
 // ── Boot ──────────────────────────────────────────────────────────────────────

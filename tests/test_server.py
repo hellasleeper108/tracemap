@@ -420,3 +420,85 @@ class TestServerRouting(unittest.TestCase):
         self.assertEqual(status, 200)
         data = json.loads(body)
         self.assertEqual(data, {"ok": True})
+
+    # ── /api/firewall/status ──────────────────────────────────────────────────
+
+    def test_firewall_status_returns_200(self):
+        status, _, _ = self._get("/api/firewall/status")
+        self.assertEqual(status, 200)
+
+    def test_firewall_status_has_available_key(self):
+        _, _, body = self._get("/api/firewall/status")
+        data = json.loads(body)
+        self.assertIn("available", data)
+        self.assertIsInstance(data["available"], bool)
+
+    def test_firewall_status_has_blocked_list(self):
+        _, _, body = self._get("/api/firewall/status")
+        data = json.loads(body)
+        self.assertIn("blocked", data)
+        self.assertIsInstance(data["blocked"], list)
+
+    # ── /api/blocked ──────────────────────────────────────────────────────────
+
+    def test_blocked_get_returns_list(self):
+        status, _, body = self._get("/api/blocked")
+        self.assertEqual(status, 200)
+        data = json.loads(body)
+        self.assertIsInstance(data, list)
+
+    # ── /api/block/<ip> POST ──────────────────────────────────────────────────
+
+    def test_block_missing_ip_returns_400(self):
+        status, body = self._post("/api/block/")
+        self.assertEqual(status, 400)
+
+    def test_block_responds_with_ok_or_error(self):
+        status, body = self._post("/api/block/8.8.8.8")
+        self.assertEqual(status, 200)
+        data = json.loads(body)
+        self.assertIn("ok", data)
+
+    # ── /api/block/<ip> DELETE ────────────────────────────────────────────────
+
+    def test_unblock_responds_with_ok_or_error(self):
+        status, body = self._request("DELETE", "/api/block/8.8.8.8")
+        self.assertEqual(status, 200)
+        data = json.loads(body)
+        self.assertIn("ok", data)
+
+    # ── /api/agents ───────────────────────────────────────────────────────────
+
+    def test_agents_returns_list(self):
+        status, _, body = self._get("/api/agents")
+        self.assertEqual(status, 200)
+        data = json.loads(body)
+        self.assertIsInstance(data, list)
+
+    # ── /api/stats bandwidth fields ───────────────────────────────────────────
+
+    def test_stats_has_bandwidth_fields(self):
+        _, _, body = self._get("/api/stats")
+        data = json.loads(body)
+        self.assertIn("bw_total_recv", data)
+        self.assertIn("bw_total_send", data)
+        self.assertIn("bw_leaders", data)
+        self.assertIsInstance(data["bw_leaders"], list)
+
+    def test_stats_has_firewall_available(self):
+        _, _, body = self._get("/api/stats")
+        data = json.loads(body)
+        self.assertIn("firewall_available", data)
+        self.assertIsInstance(data["firewall_available"], bool)
+
+    def test_stats_has_blocked_count(self):
+        _, _, body = self._get("/api/stats")
+        data = json.loads(body)
+        self.assertIn("blocked_count", data)
+        self.assertIsInstance(data["blocked_count"], int)
+
+    def test_stats_has_top_containers(self):
+        _, _, body = self._get("/api/stats")
+        data = json.loads(body)
+        self.assertIn("top_containers", data)
+        self.assertIsInstance(data["top_containers"], list)

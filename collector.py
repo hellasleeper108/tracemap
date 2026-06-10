@@ -3,6 +3,7 @@ collector.py — ss polling, connection parsing, and the background updater loop
 Owns the shared in-memory state that the server reads.
 """
 
+import http.client
 import json
 import re
 import socket
@@ -17,12 +18,21 @@ import threat
 import reputation
 import alerts
 
-REFRESH_INTERVAL = 5  # seconds
+REFRESH_INTERVAL    = 5    # seconds between poll cycles
+CONTAINER_CACHE_TTL = 60   # seconds to cache container name lookups
 
 _lock          = threading.Lock()
 _connections:  list[dict] = []
 _host_geo:     dict       = {}
 _last_updated: float      = 0.0
+
+# ── Bandwidth state ────────────────────────────────────────────────────────────
+# keyed by (ip, port, local_port) → {bytes_recv, bytes_sent, ts}
+_bw_state: dict[tuple, dict] = {}
+
+# ── Container name cache ───────────────────────────────────────────────────────
+# keyed by container_id → (name_or_None, fetched_at)
+_container_cache: dict[str, tuple[str | None, float]] = {}
 
 
 # ── Parsing helpers ────────────────────────────────────────────────────────────
@@ -45,6 +55,11 @@ def _extract_process(proc_field: str) -> str:
     return m.group(1) if m else ""
 
 
+def _extract_pid(proc_field: str) -> int | None:
+    m = re.search(r'pid=(\d+)', proc_field)
+    return int(m.group(1)) if m else None
+
+
 def _is_public(ip_str: str) -> bool:
     try:
         ip = ipaddress.ip_address(ip_str)
@@ -52,6 +67,31 @@ def _is_public(ip_str: str) -> bool:
                     or ip.is_multicast or ip.is_unspecified)
     except ValueError:
         return False
+
+
+def _parse_bw_info(info_line: str) -> tuple[int, int]:
+    """Extract (bytes_recv, bytes_sent) from ss -i extended info line."""
+    m = re.search(r'\bbytes_received:(\d+)', info_line)
+    bytes_recv = int(m.group(1)) if m else 0
+    # bytes_sent direct (newer ss) or bytes_acked (older ss)
+    m2 = re.search(r'\bbytes_sent:(\d+)', info_line)
+    m3 = re.search(r'\bbytes_acked:(\d+)', info_line)
+    bytes_sent = int(m2.group(1)) if m2 else (int(m3.group(1)) if m3 else 0)
+    return bytes_recv, bytes_sent
+
+
+def _compute_bw(key: tuple, bytes_recv: int, bytes_sent: int,
+                now: float) -> tuple[float, float]:
+    """Return (recv_bps, send_bps) by diffing against stored state."""
+    prev = _bw_state.get(key)
+    if prev and now > prev["ts"] and bytes_recv >= prev["bytes_recv"]:
+        dt        = now - prev["ts"]
+        recv_bps  = (bytes_recv - prev["bytes_recv"]) / dt
+        send_bps  = max(0, bytes_sent - prev["bytes_sent"]) / dt
+    else:
+        recv_bps = send_bps = 0.0
+    _bw_state[key] = {"bytes_recv": bytes_recv, "bytes_sent": bytes_sent, "ts": now}
+    return recv_bps, send_bps
 
 
 # ── DNS resolution ────────────────────────────────────────────────────────────
@@ -86,21 +126,103 @@ def resolve_hostnames(ips: list[str]) -> dict[str, str]:
     return result
 
 
+# ── Docker detection ──────────────────────────────────────────────────────────
+
+def _get_container_id(pid: int) -> str | None:
+    """Read /proc/<pid>/cgroup to find a Docker container ID (12-char prefix)."""
+    try:
+        with open(f"/proc/{pid}/cgroup") as f:
+            for line in f:
+                m = re.search(r'/docker/([0-9a-f]{12,64})', line)
+                if m:
+                    return m.group(1)[:12]
+    except OSError:
+        pass
+    return None
+
+
+class _UnixHTTP(http.client.HTTPConnection):
+    """HTTP over a Unix domain socket (for Docker socket API)."""
+    def __init__(self, path: str):
+        super().__init__("localhost")
+        self._path = path
+
+    def connect(self):
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(2)
+        s.connect(self._path)
+        self.sock = s
+
+
+def _get_container_name(container_id: str) -> str | None:
+    """Query Docker socket for the container name; returns None on failure."""
+    now = time.time()
+    if container_id in _container_cache:
+        name, ts = _container_cache[container_id]
+        if now - ts < CONTAINER_CACHE_TTL:
+            return name
+
+    name: str | None = None
+    try:
+        conn = _UnixHTTP("/var/run/docker.sock")
+        conn.request("GET", f"/containers/{container_id}/json")
+        resp = conn.getresponse()
+        if resp.status == 200:
+            data = json.loads(resp.read())
+            raw  = data.get("Name", "")
+            name = raw.lstrip("/") or None
+        conn.close()
+    except Exception:
+        pass
+
+    _container_cache[container_id] = (name, now)
+    return name
+
+
+def _resolve_container(pid: int | None) -> tuple[str, str]:
+    """Return (container_id, container_name) for a process; both empty if not Docker."""
+    if pid is None:
+        return "", ""
+    cid = _get_container_id(pid)
+    if not cid:
+        return "", ""
+    cname = _get_container_name(cid) or ""
+    return cid, cname
+
+
 # ── Connection polling ─────────────────────────────────────────────────────────
 
 def get_connections() -> list[dict]:
-    """Return deduplicated list of active public TCP connections."""
+    """Return deduplicated list of active public TCP connections with bandwidth."""
     try:
         result = subprocess.run(
-            ["ss", "-tnp", "state", "established"],
+            ["ss", "-tnpi", "state", "established"],
             capture_output=True, text=True, timeout=5
         )
     except Exception:
         return []
 
+    now   = time.time()
+    lines = result.stdout.splitlines()
+
+    # Group lines: each non-whitespace line starts a new connection entry;
+    # subsequent indented lines are extended info for that connection.
+    groups: list[list[str]] = []
+    for line in lines[1:]:  # skip header
+        if not line:
+            continue
+        if line[0].isspace():
+            if groups:
+                groups[-1].append(line)
+        else:
+            groups.append([line])
+
     conns = []
-    for line in result.stdout.splitlines()[1:]:  # skip header row
-        parts = line.split()
+    for group in groups:
+        main_line  = group[0]
+        info_lines = group[1:]
+
+        parts = main_line.split()
         if len(parts) < 4:
             continue
 
@@ -113,21 +235,46 @@ def get_connections() -> list[dict]:
             continue
 
         _, local_port = _parse_peer(local_col)
+
+        # Bandwidth from extended info
+        bytes_recv = bytes_sent = 0
+        for info in info_lines:
+            r, s = _parse_bw_info(info)
+            if r or s:
+                bytes_recv, bytes_sent = r, s
+                break
+
+        key = (ip, port or "", local_port or "")
+        recv_bps, send_bps = _compute_bw(key, bytes_recv, bytes_sent, now)
+
+        pid = _extract_pid(proc_field)
         conns.append({
             "ip":         ip,
             "port":       port,
             "local_port": local_port or "",
             "process":    _extract_process(proc_field),
+            "pid":        pid,
+            "bytes_recv": bytes_recv,
+            "bytes_sent": bytes_sent,
+            "recv_bps":   recv_bps,
+            "send_bps":   send_bps,
         })
 
     # Deduplicate by (ip, port), keeping first occurrence
-    seen: set[tuple] = set()
-    unique = []
+    seen:   set[tuple] = set()
+    unique: list[dict] = []
     for c in conns:
-        key = (c["ip"], c["port"])
-        if key not in seen:
-            seen.add(key)
+        key2 = (c["ip"], c["port"])
+        if key2 not in seen:
+            seen.add(key2)
             unique.append(c)
+
+    # Prune stale bandwidth state entries
+    active_keys = {(c["ip"], c["port"] or "", c["local_port"]) for c in unique}
+    for k in list(_bw_state):
+        if k not in active_keys:
+            del _bw_state[k]
+
     return unique
 
 
@@ -159,7 +306,7 @@ def updater_loop():
         if conns:
             db.log_connections(conns)
 
-        ips = list({c["ip"] for c in conns})
+        ips      = list({c["ip"] for c in conns})
         geo_data = geo.geolocate(ips)
         dns_data = resolve_hostnames(ips)
 
@@ -168,14 +315,21 @@ def updater_loop():
             g = geo_data.get(c["ip"])
             if g:
                 entry = {**c, **g}
-                entry["hostname"] = dns_data.get(c["ip"], "")
-                entry["is_tor"]   = reputation.is_tor(c["ip"])
-                entry["is_vpn"]   = reputation.is_vpn(g.get("org", ""))
+                entry["hostname"]  = dns_data.get(c["ip"], "")
+                entry["is_tor"]    = reputation.is_tor(c["ip"])
+                entry["is_vpn"]    = reputation.is_vpn(g.get("org", ""))
+                entry["is_blocked"] = db.is_blocked_ip(c["ip"])
+
+                # Docker container info
+                cid, cname = _resolve_container(c.get("pid"))
+                entry["container_id"]   = cid
+                entry["container"]      = cname
+
                 t = db.get_threat(c["ip"])
                 if t:
                     entry["abuse_score"]    = t["abuse_score"]
                     entry["threat_reports"] = t["reports"]
-                # Merge multi-source threat scores
+
                 sources = db.get_threat_sources(c["ip"])
                 if sources:
                     entry["threat_sources"] = [
@@ -186,6 +340,7 @@ def updater_loop():
                     max_src = max(s["score"] for s in sources)
                     if max_src > (entry.get("abuse_score") or 0):
                         entry["abuse_score"] = max_src
+
                 enriched.append(entry)
 
         alerts.evaluate(enriched)

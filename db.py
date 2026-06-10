@@ -102,6 +102,11 @@ def init_db():
             );
             CREATE INDEX IF NOT EXISTS idx_alert_events_sent ON alert_events(sent);
             CREATE INDEX IF NOT EXISTS idx_alert_events_ts   ON alert_events(ts);
+
+            CREATE TABLE IF NOT EXISTS blocked_ips (
+                ip         TEXT    PRIMARY KEY,
+                blocked_at INTEGER NOT NULL
+            );
         """)
 
 
@@ -436,6 +441,39 @@ def get_timeline(window_hours: int = 24) -> list[dict]:
         cur += 3600
     return result
 
+
+# ── blocked_ips ────────────────────────────────────────────────────────────────
+
+def add_blocked_ip(ip: str):
+    with _connect() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO blocked_ips (ip, blocked_at) VALUES (?, ?)",
+            (ip, int(time.time()))
+        )
+
+
+def remove_blocked_ip(ip: str):
+    with _connect() as conn:
+        conn.execute("DELETE FROM blocked_ips WHERE ip = ?", (ip,))
+
+
+def is_blocked_ip(ip: str) -> bool:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM blocked_ips WHERE ip = ?", (ip,)
+        ).fetchone()
+        return row is not None
+
+
+def get_blocked_ips() -> list[dict]:
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT ip, blocked_at FROM blocked_ips ORDER BY blocked_at DESC"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+# ── timeline / historical connections ──────────────────────────────────────────
 
 def get_connections_at(timestamp: int, window: int = 300) -> list[dict]:
     lo = timestamp - window

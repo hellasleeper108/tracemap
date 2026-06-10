@@ -37,6 +37,7 @@ class TestDBSetup(unittest.TestCase):
         self.assertIn("threat_sources", tables)
         self.assertIn("alert_rules", tables)
         self.assertIn("alert_events", tables)
+        self.assertIn("blocked_ips", tables)
 
     def test_init_is_idempotent(self):
         db.init_db()  # second call must not raise
@@ -629,3 +630,53 @@ class TestTracerouteStore(unittest.TestCase):
         r = db.get_traceroute("8.8.8.8")
         self.assertEqual(len(r["hops"]), 1)
         self.assertEqual(r["hops"][0]["ip"], "1.1.1.1")
+
+
+class TestBlockedIps(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.tmp.close()
+        self.p = patch("db.DB_PATH", Path(self.tmp.name))
+        self.p.start()
+        db.init_db()
+
+    def tearDown(self):
+        self.p.stop()
+        os.unlink(self.tmp.name)
+
+    def test_add_and_is_blocked(self):
+        db.add_blocked_ip("8.8.8.8")
+        self.assertTrue(db.is_blocked_ip("8.8.8.8"))
+
+    def test_not_blocked_initially(self):
+        self.assertFalse(db.is_blocked_ip("1.1.1.1"))
+
+    def test_remove_blocked_ip(self):
+        db.add_blocked_ip("8.8.8.8")
+        db.remove_blocked_ip("8.8.8.8")
+        self.assertFalse(db.is_blocked_ip("8.8.8.8"))
+
+    def test_remove_nonexistent_no_error(self):
+        db.remove_blocked_ip("1.2.3.4")  # should not raise
+
+    def test_get_blocked_ips_empty(self):
+        self.assertEqual(db.get_blocked_ips(), [])
+
+    def test_get_blocked_ips_returns_entries(self):
+        db.add_blocked_ip("1.1.1.1")
+        db.add_blocked_ip("2.2.2.2")
+        entries = db.get_blocked_ips()
+        ips = {e["ip"] for e in entries}
+        self.assertIn("1.1.1.1", ips)
+        self.assertIn("2.2.2.2", ips)
+
+    def test_get_blocked_ips_has_blocked_at(self):
+        db.add_blocked_ip("8.8.8.8")
+        entries = db.get_blocked_ips()
+        self.assertIn("blocked_at", entries[0])
+        self.assertGreater(entries[0]["blocked_at"], 0)
+
+    def test_upsert_does_not_duplicate(self):
+        db.add_blocked_ip("8.8.8.8")
+        db.add_blocked_ip("8.8.8.8")
+        self.assertEqual(len(db.get_blocked_ips()), 1)
