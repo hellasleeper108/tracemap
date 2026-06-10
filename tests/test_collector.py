@@ -1,9 +1,13 @@
+import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from collector import _parse_peer, _extract_process, _is_public
+import db
+from collector import _parse_peer, _extract_process, _is_public, _resolve_hostname, resolve_hostnames
 
 
 class TestParsePeer(unittest.TestCase):
@@ -135,3 +139,83 @@ class TestIsPublic(unittest.TestCase):
 
     def test_empty_string(self):
         self.assertFalse(_is_public(""))
+
+
+class TestResolveHostname(unittest.TestCase):
+    def test_getfqdn_returns_ip_means_empty(self):
+        with patch("socket.getfqdn", return_value="8.8.8.8"):
+            _, hostname = _resolve_hostname("8.8.8.8")
+        self.assertEqual(hostname, "")
+
+    def test_getfqdn_returns_name(self):
+        with patch("socket.getfqdn", return_value="dns.google"):
+            _, hostname = _resolve_hostname("8.8.8.8")
+        self.assertEqual(hostname, "dns.google")
+
+    def test_getfqdn_returns_ip_as_name(self):
+        ip, hostname = _resolve_hostname("8.8.8.8")
+        self.assertEqual(ip, "8.8.8.8")
+
+    def test_exception_returns_empty_string(self):
+        with patch("socket.getfqdn", side_effect=OSError("timeout")):
+            _, hostname = _resolve_hostname("1.2.3.4")
+        self.assertEqual(hostname, "")
+
+
+class TestResolveHostnames(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.tmp.close()
+        self.p = patch("db.DB_PATH", Path(self.tmp.name))
+        self.p.start()
+        db.init_db()
+
+    def tearDown(self):
+        self.p.stop()
+        os.unlink(self.tmp.name)
+
+    def test_empty_list_returns_empty_dict(self):
+        self.assertEqual(resolve_hostnames([]), {})
+
+    def test_uses_db_cache(self):
+        db.set_hostname("1.2.3.4", "cached.example.com")
+        with patch("socket.getfqdn") as mock_fqdn:
+            result = resolve_hostnames(["1.2.3.4"])
+            mock_fqdn.assert_not_called()
+        self.assertEqual(result["1.2.3.4"], "cached.example.com")
+
+    def test_resolves_uncached_ip(self):
+        with patch("socket.getfqdn", return_value="example.com"):
+            result = resolve_hostnames(["1.2.3.4"])
+        self.assertEqual(result["1.2.3.4"], "example.com")
+
+    def test_caches_resolved_hostname(self):
+        with patch("socket.getfqdn", return_value="example.com"):
+            resolve_hostnames(["1.2.3.4"])
+        self.assertEqual(db.get_hostname("1.2.3.4"), "example.com")
+
+    def test_dns_failure_returns_empty_string(self):
+        with patch("socket.getfqdn", side_effect=OSError("Network unreachable")):
+            result = resolve_hostnames(["1.2.3.4"])
+        self.assertEqual(result.get("1.2.3.4"), "")
+
+    def test_dns_failure_caches_empty_string(self):
+        with patch("socket.getfqdn", side_effect=OSError("timeout")):
+            resolve_hostnames(["1.2.3.4"])
+        self.assertEqual(db.get_hostname("1.2.3.4"), "")
+
+
+class TestGetStateHostname(unittest.TestCase):
+    def test_get_state_includes_hostname(self):
+        import collector
+        original = collector._connections
+        try:
+            collector._connections = [{
+                "ip": "1.2.3.4", "port": "443",
+                "hostname": "example.com", "process": "test",
+            }]
+            state = collector.get_state()
+            self.assertGreater(len(state["connections"]), 0)
+            self.assertEqual(state["connections"][0]["hostname"], "example.com")
+        finally:
+            collector._connections = original

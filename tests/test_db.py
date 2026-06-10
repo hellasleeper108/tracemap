@@ -32,6 +32,7 @@ class TestDBSetup(unittest.TestCase):
         self.assertIn("connections_log", tables)
         self.assertIn("threat_cache", tables)
         self.assertIn("traceroutes", tables)
+        self.assertIn("dns_cache", tables)
 
     def test_init_is_idempotent(self):
         db.init_db()  # second call must not raise
@@ -206,6 +207,53 @@ class TestThreatCache(unittest.TestCase):
         conn.close()
         ips = db.get_ips_needing_threat_check(ttl=3600, limit=5)
         self.assertLessEqual(len(ips), 5)
+
+
+class TestDnsCache(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.tmp.close()
+        self.p = patch("db.DB_PATH", Path(self.tmp.name))
+        self.p.start()
+        db.init_db()
+
+    def tearDown(self):
+        self.p.stop()
+        os.unlink(self.tmp.name)
+
+    def test_roundtrip(self):
+        db.set_hostname("1.2.3.4", "example.com")
+        self.assertEqual(db.get_hostname("1.2.3.4"), "example.com")
+
+    def test_empty_hostname_stored(self):
+        db.set_hostname("1.2.3.4", "")
+        self.assertEqual(db.get_hostname("1.2.3.4"), "")
+
+    def test_missing_returns_none(self):
+        self.assertIsNone(db.get_hostname("99.99.99.99"))
+
+    def test_stale_returns_none(self):
+        conn = sqlite3.connect(self.tmp.name)
+        conn.execute(
+            "INSERT INTO dns_cache (ip, hostname, resolved_at) VALUES (?,?,?)",
+            ("1.2.3.4", "example.com", int(time.time()) - 90000)
+        )
+        conn.commit()
+        conn.close()
+        self.assertIsNone(db.get_hostname("1.2.3.4"))
+
+    def test_upsert_overwrites(self):
+        db.set_hostname("1.2.3.4", "old.example.com")
+        db.set_hostname("1.2.3.4", "new.example.com")
+        self.assertEqual(db.get_hostname("1.2.3.4"), "new.example.com")
+
+    def test_resolved_at_set(self):
+        before = int(time.time())
+        db.set_hostname("1.2.3.4", "example.com")
+        conn = sqlite3.connect(self.tmp.name)
+        row = conn.execute("SELECT resolved_at FROM dns_cache WHERE ip = ?", ("1.2.3.4",)).fetchone()
+        conn.close()
+        self.assertGreaterEqual(row[0], before)
 
 
 class TestTracerouteStore(unittest.TestCase):

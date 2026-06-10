@@ -3,6 +3,7 @@ server.py — HTTP server, request routing, and JSON API.
 """
 
 import json
+from collections import Counter
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 import collector
@@ -40,6 +41,30 @@ class _Handler(BaseHTTPRequestHandler):
         elif path.startswith("/api/traceroute/"):
             ip = path.removeprefix("/api/traceroute/")
             self._json(tr.get_result(ip))
+
+        elif path == "/api/stats":
+            conns     = collector.get_state()["connections"]
+            procs     = [c["process"]     for c in conns if c.get("process")]
+            orgs      = [c["org"]         for c in conns if c.get("org")]
+            countries = [c["countryCode"] for c in conns if c.get("countryCode")]
+            threat_summary = {"malicious": 0, "suspicious": 0, "low_risk": 0, "clean": 0}
+            for c in conns:
+                score = c.get("abuse_score")
+                if score is None:
+                    continue
+                if score >= 75:   threat_summary["malicious"]  += 1
+                elif score >= 25: threat_summary["suspicious"] += 1
+                elif score >= 1:  threat_summary["low_risk"]   += 1
+                else:             threat_summary["clean"]      += 1
+            self._json({
+                "total_connections": len(conns),
+                "unique_countries":  len(set(countries)),
+                "unique_ips":        len({c["ip"] for c in conns if c.get("ip")}),
+                "top_processes":     [{"name": n, "count": v} for n, v in Counter(procs).most_common(5)],
+                "top_orgs":          [{"name": n, "count": v} for n, v in Counter(orgs).most_common(5)],
+                "top_countries":     [{"code": n, "count": v} for n, v in Counter(countries).most_common(5)],
+                "threat_summary":    threat_summary,
+            })
 
         else:
             self.send_response(404)

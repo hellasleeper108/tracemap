@@ -294,6 +294,85 @@ body {
   transition: border-color 0.12s, color 0.12s;
 }
 .trace-btn:hover { border-color: #58a6ff; color: #58a6ff; }
+
+/* ── Hostname in sidebar rows ── */
+.conn .hostname { font-size: 10px; color: #6e7681; margin-top: 1px; font-style: italic; }
+
+/* ── Stats bar ── */
+#stats-bar { border-bottom: 1px solid #30363d; flex-shrink: 0; }
+#stats-toggle {
+  padding: 6px 16px;
+  font-size: 10px;
+  color: #484f58;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  user-select: none;
+  transition: color 0.12s;
+}
+#stats-toggle:hover { color: #8b949e; }
+#stats-toggle .stats-arrow { font-size: 8px; transition: transform 0.15s; }
+#stats-toggle.open .stats-arrow { transform: rotate(180deg); }
+#stats-cards {
+  display: none;
+  padding: 0 12px 8px;
+  flex-direction: column;
+  gap: 5px;
+}
+#stats-cards.open { display: flex; }
+.stat-row {
+  font-size: 10px;
+  color: #8b949e;
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+.stat-row-key { color: #484f58; min-width: 52px; flex-shrink: 0; padding-top: 1px; }
+.stat-chip {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  border: 1px solid #21262d;
+  color: #6e7681;
+  background: #0d1117;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  transition: border-color 0.1s, color 0.1s;
+}
+.stat-chip:hover { border-color: #58a6ff; color: #58a6ff; }
+
+/* ── Context menu ── */
+#ctx-menu {
+  position: fixed;
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  padding: 4px 0;
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 12px;
+  z-index: 9999;
+  min-width: 160px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.6);
+  display: none;
+}
+.ctx-item {
+  padding: 6px 14px;
+  cursor: pointer;
+  color: #c9d1d9;
+  transition: background 0.1s;
+  white-space: nowrap;
+}
+.ctx-item:hover { background: #21262d; }
+.ctx-disabled { color: #484f58 !important; cursor: not-allowed; }
+.ctx-disabled:hover { background: transparent !important; }
+.ctx-sep { border-top: 1px solid #21262d; margin: 3px 0; }
+.ctx-tag { font-size: 9px; color: #3d444d; margin-left: 6px; }
+
+/* ── "All" process chip ── */
+.chip-all { color: #58a6ff !important; border-color: #388bfd !important; background: rgba(56,139,253,0.08) !important; }
 </style>
 </head>
 <body>
@@ -303,6 +382,15 @@ body {
     <h1>Network Trace Map</h1>
     <div id="stats">Connecting&hellip;</div>
   </div>
+  <!-- Stats bar (collapsible) -->
+  <div id="stats-bar">
+    <div id="stats-toggle">
+      <span id="stats-summary">loading&hellip;</span>
+      <span class="stats-arrow">&#9662;</span>
+    </div>
+    <div id="stats-cards"></div>
+  </div>
+
   <div id="host-info"><span class="label">HOST</span> &mdash; loading&hellip;</div>
 
   <div id="filter-bar">
@@ -341,6 +429,16 @@ body {
     </div>
     <div id="history-footer" id="history-summary"></div>
   </div>
+</div>
+
+<!-- Context menu -->
+<div id="ctx-menu">
+  <div class="ctx-item" data-action="traceroute">&#10547; Trace Route</div>
+  <div class="ctx-item" data-action="threat">&#9873; Threat Lookup</div>
+  <div class="ctx-item" data-action="copy">&#8984; Copy IP</div>
+  <div class="ctx-item" data-action="history">&#9202; Connection History</div>
+  <div class="ctx-sep"></div>
+  <div class="ctx-item ctx-disabled" data-action="block">&#8856; Block IP<span class="ctx-tag">(Phase 3)</span></div>
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -418,7 +516,7 @@ let lastData    = null;
 function matchesFilter(c) {
   if (searchText) {
     const q = searchText.toLowerCase();
-    const hay = [c.ip, c.city, c.country, c.countryCode, c.org, c.isp, c.process]
+    const hay = [c.ip, c.city, c.country, c.countryCode, c.org, c.isp, c.process, c.hostname]
       .filter(Boolean).join(' ').toLowerCase();
     if (!hay.includes(q)) return false;
   }
@@ -443,15 +541,31 @@ function clearAll() {
 
 function renderChips(connections, threatEnabled) {
   const container = document.getElementById('chips');
-  const procs = [...new Set(connections.map(c => c.process).filter(Boolean))].sort();
+  const procCounts = {};
+  connections.forEach(c => { if (c.process) procCounts[c.process] = (procCounts[c.process] || 0) + 1; });
+  const procs = Object.keys(procCounts).sort();
   const hasThreats = threatEnabled && connections.some(c => c.abuse_score > 0);
   container.innerHTML = '';
+
+  if (activeProcs.size > 0) {
+    const allChip = document.createElement('span');
+    allChip.className = 'chip chip-all';
+    allChip.textContent = 'All';
+    allChip.onclick = () => {
+      activeProcs.clear();
+      updateClearBtn();
+      if (lastData) { renderChips(lastData.connections, lastData.threat_enabled); applyFilter(lastData.connections); }
+    };
+    container.appendChild(allChip);
+  }
+
   procs.forEach(proc => {
     const color  = procColors[proc] || '#6e7681';
     const active = activeProcs.has(proc);
+    const count  = procCounts[proc];
     const chip   = document.createElement('span');
     chip.className = 'chip' + (active ? ' active' : '');
-    chip.textContent = proc;
+    chip.textContent = `${proc} (${count})`;
     if (active) { chip.style.borderColor = color; chip.style.color = color; chip.style.background = hexToRgba(color, 0.12); }
     chip.onclick = () => {
       if (activeProcs.has(proc)) activeProcs.delete(proc); else activeProcs.add(proc);
@@ -673,7 +787,8 @@ function popupHtml(c) {
     ? `<br><span style="color:${lvl==='high'?'#f85149':lvl==='med'?'#f0883e':'#e3b341'}">
        ${lvl==='high'?'☠':'⚠'} AbuseIPDB: ${c.abuse_score}/100 (${c.threat_reports} reports)</span>`
     : '';
-  return `<b>${c.ip}</b><br>
+  const hline = c.hostname ? `<br><span style="color:#6e7681;font-size:10px">${c.hostname}</span>` : '';
+  return `<b>${c.ip}</b>${hline}<br>
     <span style="color:#8b949e">:${c.port}</span><br>
     ${c.city ? c.city + ', ' : ''}${c.country || '?'}<br>
     ${c.org || c.isp || ''}
@@ -725,6 +840,9 @@ async function refresh() {
       peerMarkers[c.ip].setIcon(icon);
     }
     peerMarkers[c.ip].bindPopup(popupHtml(c));
+    peerMarkers[c.ip].off('contextmenu').on('contextmenu', e => {
+      showCtxMenu(e.originalEvent.clientX, e.originalEvent.clientY, c);
+    });
 
     if (hostLatLng) {
       const arcColor = lvl === 'high' ? '#f85149' : lvl === 'med' ? '#f0883e' : color;
@@ -743,6 +861,7 @@ async function refresh() {
     body.className = 'conn-body';
     body.innerHTML = `
       <div class="ip" style="color:${color}">${c.ip}<span style="color:#484f58">:${c.port}</span></div>
+      ${c.hostname ? `<div class="hostname">${c.hostname}</div>` : ''}
       <div class="loc">${c.city ? c.city + ', ' : ''}${c.country || '?'} (${c.countryCode || '?'})</div>
       ${c.process ? `<div class="proc">⚙ ${c.process}</div>` : ''}
       ${c.org ? `<div class="org">🏢 ${c.org}</div>` : ''}
@@ -758,6 +877,7 @@ async function refresh() {
     row.appendChild(body);
     row.appendChild(hbtn);
     row.addEventListener('click', () => { map.setView([c.lat, c.lon], 5); peerMarkers[c.ip].openPopup(); });
+    row.addEventListener('contextmenu', e => { e.preventDefault(); showCtxMenu(e.clientX, e.clientY, c); });
 
     rowMap[c.ip + ':' + c.port] = row;
     list.appendChild(row);
@@ -774,7 +894,129 @@ async function refresh() {
   const total = data.connections.length;
   document.getElementById('stats').textContent =
     `${total} connection${total !== 1 ? 's' : ''} · ${t.toLocaleTimeString()}`;
+
+  refreshStats();
 }
+
+// ── Stats bar ─────────────────────────────────────────────────────────────────
+
+let statsOpen    = false;
+let lastStatsData = null;
+
+document.getElementById('stats-toggle').addEventListener('click', () => {
+  statsOpen = !statsOpen;
+  document.getElementById('stats-toggle').classList.toggle('open', statsOpen);
+  document.getElementById('stats-cards').classList.toggle('open', statsOpen);
+  if (statsOpen && lastStatsData) renderStatsCards(lastStatsData);
+});
+
+async function refreshStats() {
+  try {
+    const r = await fetch('/api/stats');
+    lastStatsData = await r.json();
+  } catch(e) { return; }
+  const s = lastStatsData;
+  document.getElementById('stats-summary').textContent =
+    `${s.total_connections} conn · ${s.unique_countries} countries · ${s.unique_ips} IPs`;
+  if (statsOpen) renderStatsCards(s);
+}
+
+function renderStatsCards(s) {
+  const cards = document.getElementById('stats-cards');
+  cards.innerHTML = '';
+
+  const ts = s.threat_summary;
+  const parts = [];
+  if (ts.malicious > 0)  parts.push(`<span style="color:#f85149">&#9760; ${ts.malicious} malicious</span>`);
+  if (ts.suspicious > 0) parts.push(`<span style="color:#f0883e">&#9888; ${ts.suspicious} suspicious</span>`);
+  if (ts.low_risk > 0)   parts.push(`<span style="color:#e3b341">&#9888; ${ts.low_risk} low risk</span>`);
+  if (ts.clean > 0)      parts.push(`<span style="color:#3fb950">${ts.clean} clean</span>`);
+  if (parts.length > 0) {
+    const row = document.createElement('div');
+    row.className = 'stat-row';
+    row.innerHTML = `<span class="stat-row-key">threats</span><span>${parts.join(' &middot; ')}</span>`;
+    cards.appendChild(row);
+  }
+
+  if (s.top_processes.length > 0) {
+    const row = document.createElement('div');
+    row.className = 'stat-row';
+    const lbl = document.createElement('span');
+    lbl.className = 'stat-row-key';
+    lbl.textContent = 'procs';
+    row.appendChild(lbl);
+    s.top_processes.forEach(p => {
+      const chip = document.createElement('span');
+      chip.className = 'stat-chip';
+      chip.textContent = `${p.name} \xd7${p.count}`;
+      chip.addEventListener('click', () => {
+        activeProcs.clear(); activeProcs.add(p.name);
+        updateClearBtn();
+        if (lastData) { renderChips(lastData.connections, lastData.threat_enabled); applyFilter(lastData.connections); }
+      });
+      row.appendChild(chip);
+    });
+    cards.appendChild(row);
+  }
+
+  if (s.top_countries.length > 0) {
+    const row = document.createElement('div');
+    row.className = 'stat-row';
+    const lbl = document.createElement('span');
+    lbl.className = 'stat-row-key';
+    lbl.textContent = 'countries';
+    row.appendChild(lbl);
+    s.top_countries.forEach(ct => {
+      const chip = document.createElement('span');
+      chip.className = 'stat-chip';
+      chip.textContent = `${ct.code} \xd7${ct.count}`;
+      chip.addEventListener('click', () => {
+        searchText = ct.code;
+        document.getElementById('search-input').value = ct.code;
+        updateClearBtn();
+        if (lastData) applyFilter(lastData.connections);
+      });
+      row.appendChild(chip);
+    });
+    cards.appendChild(row);
+  }
+}
+
+// ── Context menu ──────────────────────────────────────────────────────────────
+
+let ctxConn = null;
+
+function showCtxMenu(x, y, conn) {
+  ctxConn = conn;
+  const menu = document.getElementById('ctx-menu');
+  menu.style.left = x + 'px';
+  menu.style.top  = y + 'px';
+  menu.style.display = 'block';
+  const r = menu.getBoundingClientRect();
+  if (r.right  > window.innerWidth)  menu.style.left = (x - r.width)  + 'px';
+  if (r.bottom > window.innerHeight) menu.style.top  = (y - r.height) + 'px';
+}
+
+function hideCtxMenu() {
+  document.getElementById('ctx-menu').style.display = 'none';
+  ctxConn = null;
+}
+
+document.getElementById('ctx-menu').addEventListener('click', e => {
+  const action = e.target.closest('.ctx-item')?.dataset.action;
+  if (!action || !ctxConn || action === 'block') { hideCtxMenu(); return; }
+  switch (action) {
+    case 'traceroute': startTrace(ctxConn.ip);   break;
+    case 'threat':
+    case 'history':    openHistory(ctxConn.ip);  break;
+    case 'copy':       navigator.clipboard.writeText(ctxConn.ip).catch(() => {}); break;
+  }
+  hideCtxMenu();
+});
+
+document.addEventListener('click',      e => { if (!e.target.closest('#ctx-menu')) hideCtxMenu(); });
+document.addEventListener('keydown',     e => { if (e.key === 'Escape') hideCtxMenu(); });
+document.addEventListener('contextmenu', e => { if (!e.target.closest('#ctx-menu')) hideCtxMenu(); });
 
 // ── Event listeners ───────────────────────────────────────────────────────────
 

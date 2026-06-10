@@ -58,6 +58,12 @@ def init_db():
                 ran_at    INTEGER NOT NULL,
                 hops      TEXT
             );
+
+            CREATE TABLE IF NOT EXISTS dns_cache (
+                ip          TEXT    PRIMARY KEY,
+                hostname    TEXT    NOT NULL DEFAULT '',
+                resolved_at INTEGER NOT NULL
+            );
         """)
 
 
@@ -165,6 +171,28 @@ def store_traceroute(ip: str, hops: list[dict]):
             INSERT INTO traceroutes (target_ip, ran_at, hops)
             VALUES (?, ?, ?)
         """, (ip, int(time.time()), json.dumps(hops)))
+
+
+DNS_TTL = 86400  # 24 hours
+
+
+def get_hostname(ip: str) -> str | None:
+    """Return cached hostname if fresh (within DNS_TTL), else None."""
+    cutoff = int(time.time()) - DNS_TTL
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT hostname FROM dns_cache WHERE ip = ? AND resolved_at > ?",
+            (ip, cutoff)
+        ).fetchone()
+        return row["hostname"] if row else None
+
+
+def set_hostname(ip: str, hostname: str):
+    with _connect() as conn:
+        conn.execute("""
+            INSERT OR REPLACE INTO dns_cache (ip, hostname, resolved_at)
+            VALUES (?, ?, ?)
+        """, (ip, hostname, int(time.time())))
 
 
 def get_traceroute(ip: str) -> dict | None:

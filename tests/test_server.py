@@ -210,3 +210,72 @@ class TestServerRouting(unittest.TestCase):
     def test_api_prefix_without_subpath_returns_404(self):
         status, _, _ = self._get("/api/")
         self.assertEqual(status, 404)
+
+    # ── /api/stats ────────────────────────────────────────────────────────────
+
+    def test_stats_status_200(self):
+        status, _, _ = self._get("/api/stats")
+        self.assertEqual(status, 200)
+
+    def test_stats_content_type_json(self):
+        _, ct, _ = self._get("/api/stats")
+        self.assertIn("application/json", ct)
+
+    def test_stats_has_required_keys(self):
+        _, _, body = self._get("/api/stats")
+        data = json.loads(body)
+        for key in ("total_connections", "unique_countries", "unique_ips",
+                    "top_processes", "top_orgs", "top_countries", "threat_summary"):
+            self.assertIn(key, data)
+
+    def test_stats_total_connections_matches_seeded(self):
+        _, _, body = self._get("/api/stats")
+        data = json.loads(body)
+        self.assertEqual(data["total_connections"], 1)
+
+    def test_stats_unique_ips_matches_seeded(self):
+        _, _, body = self._get("/api/stats")
+        data = json.loads(body)
+        self.assertEqual(data["unique_ips"], 1)
+
+    def test_stats_threat_summary_has_required_keys(self):
+        _, _, body = self._get("/api/stats")
+        data = json.loads(body)
+        ts = data["threat_summary"]
+        for key in ("malicious", "suspicious", "low_risk", "clean"):
+            self.assertIn(key, ts)
+
+    def test_stats_top_processes_structure(self):
+        _, _, body = self._get("/api/stats")
+        data = json.loads(body)
+        for p in data["top_processes"]:
+            self.assertIn("name", p)
+            self.assertIn("count", p)
+
+    def test_stats_top_countries_structure(self):
+        _, _, body = self._get("/api/stats")
+        data = json.loads(body)
+        for c in data["top_countries"]:
+            self.assertIn("code", c)
+            self.assertIn("count", c)
+
+    def test_stats_threat_aggregation(self):
+        import collector
+        original = collector._connections
+        try:
+            collector._connections = [
+                {"ip": "1.1.1.1", "port": "443", "process": "test",
+                 "country": "US", "countryCode": "US", "city": "X",
+                 "lat": 0.0, "lon": 0.0, "org": "Org", "isp": "ISP",
+                 "abuse_score": 90, "threat_reports": 5},
+                {"ip": "2.2.2.2", "port": "80",  "process": "curl",
+                 "country": "DE", "countryCode": "DE", "city": "Y",
+                 "lat": 0.0, "lon": 0.0, "org": "Org2", "isp": "ISP2",
+                 "abuse_score": 30, "threat_reports": 2},
+            ]
+            _, _, body = self._get("/api/stats")
+        finally:
+            collector._connections = original
+        data = json.loads(body)
+        self.assertEqual(data["threat_summary"]["malicious"],  1)
+        self.assertEqual(data["threat_summary"]["suspicious"], 1)

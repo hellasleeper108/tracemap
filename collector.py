@@ -4,10 +4,12 @@ Owns the shared in-memory state that the server reads.
 """
 
 import re
+import socket
 import subprocess
 import ipaddress
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 import db
 import geo
 import threat
@@ -47,6 +49,38 @@ def _is_public(ip_str: str) -> bool:
                     or ip.is_multicast or ip.is_unspecified)
     except ValueError:
         return False
+
+
+# ── DNS resolution ────────────────────────────────────────────────────────────
+
+def _resolve_hostname(ip: str) -> tuple[str, str]:
+    """Resolve FQDN for an IP; return empty string when unresolvable."""
+    try:
+        name = socket.getfqdn(ip)
+        return ip, ("" if name == ip else name)
+    except Exception:
+        return ip, ""
+
+
+def resolve_hostnames(ips: list[str]) -> dict[str, str]:
+    """Return {ip: hostname} for given IPs using DB cache (24h TTL)."""
+    result: dict[str, str] = {}
+    to_resolve: list[str] = []
+
+    for ip in ips:
+        cached = db.get_hostname(ip)
+        if cached is not None:
+            result[ip] = cached
+        else:
+            to_resolve.append(ip)
+
+    if to_resolve:
+        with ThreadPoolExecutor(max_workers=min(10, len(to_resolve))) as pool:
+            for ip, hostname in pool.map(_resolve_hostname, to_resolve):
+                result[ip] = hostname
+                db.set_hostname(ip, hostname)
+
+    return result
 
 
 # ── Connection polling ─────────────────────────────────────────────────────────
@@ -124,12 +158,14 @@ def updater_loop():
 
         ips = list({c["ip"] for c in conns})
         geo_data = geo.geolocate(ips)
+        dns_data = resolve_hostnames(ips)
 
         enriched = []
         for c in conns:
             g = geo_data.get(c["ip"])
             if g:
                 entry = {**c, **g}
+                entry["hostname"] = dns_data.get(c["ip"], "")
                 t = db.get_threat(c["ip"])
                 if t:
                     entry["abuse_score"] = t["abuse_score"]
