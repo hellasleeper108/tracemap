@@ -23,6 +23,8 @@ def main():
     )
     parser.add_argument("--port",        type=int, default=server.PORT,
                         help="HTTP server port (default: 9999)")
+    parser.add_argument("--db",          metavar="PATH",
+                        help="SQLite database path (default: ~/.local/share/tracemap/tracemap.db)")
     parser.add_argument("--alerts-file", metavar="PATH",
                         help="Load alert rules from a JSON file at startup")
     parser.add_argument("--agent",       action="store_true",
@@ -34,6 +36,9 @@ def main():
     args = parser.parse_args()
 
     server.PORT = args.port
+
+    if args.db:
+        db.set_db_path(args.db)
 
     db.init_db()
 

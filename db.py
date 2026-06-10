@@ -11,6 +11,11 @@ from pathlib import Path
 DB_PATH = Path.home() / ".local" / "share" / "tracemap" / "tracemap.db"
 
 
+def set_db_path(path: str):
+    global DB_PATH
+    DB_PATH = Path(path)
+
+
 def _connect() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
@@ -106,6 +111,12 @@ def init_db():
             CREATE TABLE IF NOT EXISTS blocked_ips (
                 ip         TEXT    PRIMARY KEY,
                 blocked_at INTEGER NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS ip_notes (
+                ip         TEXT    PRIMARY KEY,
+                note       TEXT    NOT NULL DEFAULT '',
+                updated_at INTEGER NOT NULL
             );
         """)
 
@@ -492,3 +503,58 @@ def get_connections_at(timestamp: int, window: int = 300) -> list[dict]:
             ORDER BY seen_at DESC
         """, (lo, hi)).fetchall()
         return [dict(r) for r in rows]
+
+
+# ── ip_notes ───────────────────────────────────────────────────────────────────
+
+def get_note(ip: str) -> str:
+    with _connect() as conn:
+        row = conn.execute("SELECT note FROM ip_notes WHERE ip = ?", (ip,)).fetchone()
+        return row["note"] if row else ""
+
+
+def set_note(ip: str, note: str):
+    with _connect() as conn:
+        conn.execute("""
+            INSERT OR REPLACE INTO ip_notes (ip, note, updated_at)
+            VALUES (?, ?, ?)
+        """, (ip, note, int(time.time())))
+
+
+# ── export helpers ─────────────────────────────────────────────────────────────
+
+def get_all_threats(limit: int = 500) -> list[dict]:
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM threat_cache ORDER BY checked_at DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_export_connections(limit: int = 5000) -> list[dict]:
+    with _connect() as conn:
+        rows = conn.execute("""
+            SELECT ip, port, process, seen_at
+            FROM connections_log
+            ORDER BY seen_at DESC
+            LIMIT ?
+        """, (limit,)).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_db_stats() -> dict:
+    tables = [
+        "geo_cache", "connections_log", "threat_cache", "traceroutes",
+        "dns_cache", "reputation_cache", "threat_sources", "alert_rules",
+        "alert_events", "blocked_ips", "ip_notes",
+    ]
+    row_counts: dict[str, int] = {}
+    with _connect() as conn:
+        for table in tables:
+            try:
+                row = conn.execute(f"SELECT COUNT(*) AS n FROM {table}").fetchone()
+                row_counts[table] = row["n"]
+            except Exception:
+                row_counts[table] = 0
+    db_size = DB_PATH.stat().st_size if DB_PATH.exists() else 0
+    return {"row_counts": row_counts, "db_size_bytes": db_size}
