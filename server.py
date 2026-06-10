@@ -2,6 +2,8 @@
 server.py — HTTP server, request routing, and JSON API.
 """
 
+import csv
+import io
 import json
 from collections import Counter
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -14,6 +16,8 @@ import threat
 import firewall
 import agent
 import traceroute as tr
+
+REPORTS_DIR = Path.home() / ".local" / "share" / "tracemap" / "reports"
 
 PORT        = 9999
 STATIC_DIR  = Path(__file__).parent / "static"
@@ -128,6 +132,7 @@ class _Handler(BaseHTTPRequestHandler):
                 key=lambda x: x["recv_bps"] + x["send_bps"], reverse=True
             )[:5]
             self._json({
+                "total":             len(conns),
                 "total_connections": len(conns),
                 "unique_countries":  len(set(countries)),
                 "unique_ips":        len({c["ip"] for c in conns if c.get("ip")}),
@@ -157,6 +162,44 @@ class _Handler(BaseHTTPRequestHandler):
 
         elif path == "/api/alerts/unread":
             self._json({"count": db.get_unread_alert_count()})
+
+        elif path == "/api/timeline":
+            window = int((params.get("window") or ["24"])[0])
+            self._json(db.get_timeline(window_hours=window))
+
+        elif path == "/api/threats":
+            self._json(db.get_all_threats())
+
+        elif path == "/api/rules":
+            self._json(db.get_alert_rules(enabled_only=False))
+
+        elif path.startswith("/api/notes/"):
+            ip = path.removeprefix("/api/notes/")
+            self._json({"ip": ip, "note": db.get_note(ip)})
+
+        elif path == "/api/export/connections":
+            fmt = (params.get("format") or ["json"])[0]
+            rows = db.get_export_connections()
+            if fmt == "csv":
+                self._csv(rows, ["ip", "port", "process", "seen_at"])
+            else:
+                self._json(rows)
+
+        elif path == "/api/export/threats":
+            self._json(db.get_all_threats())
+
+        elif path == "/api/reports":
+            if REPORTS_DIR.exists():
+                files = sorted(REPORTS_DIR.glob("*.json"), reverse=True)
+                self._json([{"file": f.name, "date": f.stem} for f in files[:50]])
+            else:
+                self._json([])
+
+        elif path == "/api/db/stats":
+            self._json(db.get_db_stats())
+
+        elif path == "/api/geo/status":
+            self._json({"source": "ip-api.com"})
 
         else:
             self._error(404, "not found")
@@ -189,6 +232,33 @@ class _Handler(BaseHTTPRequestHandler):
             body = self._read_json_body()
             ids  = body.get("ids")  # list or None (None = mark all)
             db.mark_alerts_read(ids)
+            self._json({"ok": True})
+
+        elif path == "/api/rules":
+            body = self._read_json_body()
+            rule_type = body.get("type", "")
+            if rule_type not in ("country", "threat_score", "new_ip", "new_process"):
+                return self._error(400, "invalid type")
+            value = body.get("value", "")
+            if rule_type == "country":
+                cond = json.dumps({"code": value})
+            elif rule_type == "threat_score":
+                cond = json.dumps({"min_score": value})
+            else:
+                cond = "{}"
+            act = body.get("action", {"type": "desktop"})
+            rid = db.create_alert_rule(
+                rule_type=rule_type,
+                condition=cond,
+                action=json.dumps(act) if isinstance(act, dict) else str(act),
+            )
+            rule = db.get_alert_rule(rid)
+            self._json_201(rule)
+
+        elif path.startswith("/api/notes/"):
+            ip = path.removeprefix("/api/notes/")
+            body = self._read_json_body()
+            db.set_note(ip, body.get("note", ""))
             self._json({"ok": True})
 
         elif path.startswith("/api/block/"):
@@ -260,6 +330,27 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _json_201(self, data: dict | list):
+        body = json.dumps(data).encode()
+        self.send_response(201)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _csv(self, rows: list[dict], fields: list[str]):
+        buf = io.StringIO()
+        w = csv.DictWriter(buf, fieldnames=fields, extrasaction="ignore")
+        w.writeheader()
+        w.writerows(rows)
+        body = buf.getvalue().encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/csv")
+        self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
 
