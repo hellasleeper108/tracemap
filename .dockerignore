@@ -1,0 +1,6 @@
+*.db
+__pycache__/
+.claude/
+*.pyc
+*.pyo
+.git/

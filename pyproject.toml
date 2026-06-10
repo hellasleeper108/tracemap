@@ -1,0 +1,21 @@
+[build-system]
+requires      = ["setuptools>=68"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name            = "tracemap"
+version         = "0.4.0"
+description     = "Live network connection visualizer on a world map"
+readme          = "README.md"
+requires-python = ">=3.10"
+license         = { text = "MIT" }
+
+[project.scripts]
+tracemap = "tracemap:main"
+
+[tool.setuptools.packages.find]
+where   = ["."]
+include = ["tracemap*"]
+
+[tool.setuptools.package-data]
+"*" = ["static/*"]

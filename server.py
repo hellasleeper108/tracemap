@@ -14,6 +14,8 @@ import threat
 import firewall
 import agent
 import traceroute as tr
+import report
+import geo
 
 PORT        = 9999
 STATIC_DIR  = Path(__file__).parent / "static"
@@ -145,6 +147,45 @@ class _Handler(BaseHTTPRequestHandler):
                 "bw_leaders":        bw_leaders,
             })
 
+        elif path.startswith("/api/notes/"):
+            ip = path.removeprefix("/api/notes/")
+            if not ip:
+                return self._error(400, "missing ip")
+            self._json({"ip": ip, "note": db.get_note(ip)})
+
+        elif path == "/api/export/connections":
+            since = int((params.get("since") or ["0"])[0])
+            fmt   = (params.get("format") or ["json"])[0]
+            rows  = db.export_connections(since=since)
+            if fmt == "csv":
+                self._csv(rows, "connections.csv")
+            else:
+                self._json(rows)
+
+        elif path == "/api/export/threats":
+            fmt  = (params.get("format") or ["json"])[0]
+            rows = db.export_threats()
+            if fmt == "csv":
+                self._csv(rows, "threats.csv")
+            else:
+                self._json(rows)
+
+        elif path == "/api/reports":
+            self._json(report.list_reports())
+
+        elif path.startswith("/api/reports/"):
+            date = path.removeprefix("/api/reports/")
+            r    = report.get_report(date)
+            if r is None:
+                return self._error(404, "report not found")
+            self._json(r)
+
+        elif path == "/api/db/stats":
+            self._json(db.get_db_stats())
+
+        elif path == "/api/geo/status":
+            self._json(geo.get_geo_status())
+
         elif path == "/api/alerts/rules":
             self._json(db.get_alert_rules(enabled_only=False))
 
@@ -190,6 +231,15 @@ class _Handler(BaseHTTPRequestHandler):
             ids  = body.get("ids")  # list or None (None = mark all)
             db.mark_alerts_read(ids)
             self._json({"ok": True})
+
+        elif path.startswith("/api/notes/"):
+            ip   = path.removeprefix("/api/notes/")
+            if not ip:
+                return self._error(400, "missing ip")
+            body = self._read_json_body()
+            note = str(body.get("note", ""))[:2000]
+            db.set_note(ip, note)
+            self._json({"ip": ip, "note": note})
 
         elif path.startswith("/api/block/"):
             ip = path.removeprefix("/api/block/")
@@ -260,6 +310,24 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _csv(self, rows: list[dict], filename: str):
+        if not rows:
+            body = b""
+        else:
+            import io
+            import csv as _csv
+            buf = io.StringIO()
+            w   = _csv.DictWriter(buf, fieldnames=list(rows[0].keys()))
+            w.writeheader()
+            w.writerows(rows)
+            body = buf.getvalue().encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/csv")
+        self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+        self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
 

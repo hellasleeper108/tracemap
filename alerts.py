@@ -8,16 +8,27 @@ rules only fire once per lifetime of the process.
 Rule condition and action fields are stored as JSON strings in the DB:
   condition: {"code":"CN"} | {"min_score":75} | "{}" for new_ip/new_process
   action:    {"type":"desktop"} | {"type":"webhook","url":"https://..."}
+             | {"type":"slack","url":"https://hooks.slack.com/..."} | {"type":"email","to":"user@example.com"}
 """
 
 import json
+import smtplib
 import threading
 import urllib.request
+from email.mime.text import MIMEText
 import db
 
 _lock        = threading.Lock()
 _seen_ips:   set[str] = set()
 _seen_procs: set[str] = set()
+
+_smtp_config: dict = {}   # set by configure_smtp()
+
+
+def configure_smtp(host: str, port: int, user: str, password: str, from_addr: str):
+    global _smtp_config
+    _smtp_config = {"host": host, "port": port, "user": user,
+                    "password": password, "from": from_addr}
 
 
 def load_rules_from_file(path: str):
@@ -54,11 +65,17 @@ def _fire(rule: dict, conn: dict):
         act = json.loads(rule.get("action") or '{"type":"desktop"}')
     except Exception:
         act = {"type": "desktop"}
-    if act.get("type") == "webhook" and act.get("url"):
+    atype = act.get("type", "desktop")
+    ip    = conn.get("ip", "?")
+
+    if atype == "webhook" and act.get("url"):
         _fire_webhook(act["url"], {
-            "id": eid, "msg": msg,
-            "ip": conn.get("ip"), "rule_type": rule["rule_type"],
+            "id": eid, "msg": msg, "ip": ip, "rule_type": rule["rule_type"],
         })
+    elif atype == "slack" and act.get("url"):
+        _fire_slack(act["url"], msg, rule["rule_type"], ip)
+    elif atype == "email" and act.get("to"):
+        _fire_email(act["to"], f"tracemap alert: {rule['rule_type']} — {ip}", msg)
 
 
 def _fire_webhook(url: str, payload: dict):
@@ -71,6 +88,37 @@ def _fire_webhook(url: str, payload: dict):
         urllib.request.urlopen(req, timeout=5)
     except Exception as e:
         print(f"[alerts] Webhook to {url} failed: {e}")
+
+
+def _fire_slack(url: str, msg: str, rule_type: str, ip: str):
+    payload = {
+        "blocks": [
+            {"type": "section", "text": {"type": "mrkdwn",
+             "text": f"*[tracemap alert]* `{rule_type.upper()}`\n{msg}"}},
+            {"type": "context", "elements": [{"type": "mrkdwn", "text": f"IP: `{ip}`"}]},
+        ]
+    }
+    _fire_webhook(url, payload)
+
+
+def _fire_email(to: str, subject: str, body: str):
+    if not _smtp_config:
+        print("[alerts] Email skipped — SMTP not configured")
+        return
+    try:
+        msg_obj = MIMEText(body, "plain")
+        msg_obj["Subject"] = subject
+        msg_obj["From"]    = _smtp_config.get("from", "tracemap@localhost")
+        msg_obj["To"]      = to
+        port = _smtp_config.get("port", 587)
+        with smtplib.SMTP(_smtp_config["host"], port, timeout=10) as s:
+            s.starttls()
+            if _smtp_config.get("user"):
+                s.login(_smtp_config["user"], _smtp_config.get("password", ""))
+            s.sendmail(msg_obj["From"], [to], msg_obj.as_string())
+        print(f"[alerts] Email sent to {to}")
+    except Exception as e:
+        print(f"[alerts] Email to {to} failed: {e}")
 
 
 def evaluate(connections: list[dict]):

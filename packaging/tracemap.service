@@ -1,0 +1,12 @@
+[Unit]
+Description=tracemap — Live network connection visualizer
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/tracemap --port 9999
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

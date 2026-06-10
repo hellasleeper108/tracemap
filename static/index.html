@@ -704,7 +704,86 @@ body {
 }
 #rules-add-btn:hover { background: rgba(56,139,253,0.18); }
 
-/* ── Bandwidth display ── */
+/* ── IP Notes ── */
+.note-btn {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: #3d444d;
+  cursor: pointer;
+  font-size: 11px;
+  padding: 2px 0;
+  line-height: 1;
+  transition: color 0.12s;
+  margin-top: 1px;
+}
+.note-btn:hover { color: #e3b341; }
+.conn .note-text {
+  font-size: 10px;
+  color: #e3b341;
+  margin-top: 2px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.note-edit-wrap {
+  margin-top: 4px;
+  display: none;
+}
+.note-edit-wrap.open { display: block; }
+.note-textarea {
+  width: 100%;
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 3px;
+  color: #e3b341;
+  font-family: inherit;
+  font-size: 10px;
+  padding: 4px 6px;
+  resize: vertical;
+  min-height: 40px;
+  outline: none;
+  transition: border-color 0.12s;
+}
+.note-textarea:focus { border-color: #e3b341; }
+.note-save-btn {
+  margin-top: 3px;
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 3px;
+  border: 1px solid #30363d;
+  background: none;
+  color: #8b949e;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.12s;
+}
+.note-save-btn:hover { border-color: #e3b341; color: #e3b341; }
+
+/* ── Export button ── */
+#export-btn {
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 3px;
+  border: 1px solid #30363d;
+  background: none;
+  color: #6e7681;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.12s;
+}
+#export-btn:hover { border-color: #58a6ff; color: #58a6ff; }
+
+/* ── Action type badge in rules modal ── */
+.rule-action-badge {
+  font-size: 9px;
+  padding: 1px 4px;
+  border-radius: 2px;
+  background: rgba(88,166,255,0.1);
+  border: 1px solid rgba(88,166,255,0.2);
+  color: #79c0ff;
+  flex-shrink: 0;
+}
+</style>
 .conn .bw { font-size: 10px; color: #3d444d; margin-top: 1px; }
 
 /* ── Blocked rows ── */
@@ -833,7 +912,10 @@ body {
   <div id="stats-bar">
     <div id="stats-toggle">
       <span id="stats-summary">loading&hellip;</span>
-      <span class="stats-arrow">&#9662;</span>
+      <span style="display:flex;align-items:center;gap:6px">
+        <button id="export-btn" title="Export connections CSV" onclick="event.stopPropagation();exportCsv()">&#8595; CSV</button>
+        <span class="stats-arrow">&#9662;</span>
+      </span>
     </div>
     <div id="stats-cards"></div>
   </div>
@@ -921,6 +1003,13 @@ body {
           <option value="new_process">new_process</option>
         </select>
         <input id="rules-cond-val" class="rules-input-sm" type="text" placeholder="CC (e.g. CN)">
+        <select id="rules-action-select" class="rules-select">
+          <option value="desktop">desktop</option>
+          <option value="webhook">webhook</option>
+          <option value="slack">slack</option>
+          <option value="email">email</option>
+        </select>
+        <input id="rules-action-val" class="rules-input-sm" type="text" placeholder="URL or email" style="display:none">
         <button id="rules-add-btn">+ Add</button>
       </div>
     </div>
@@ -992,6 +1081,15 @@ function markerColor(proc, score, isTor, isVpn) {
 function hexToRgba(hex, a) {
   const n = parseInt(hex.slice(1), 16);
   return `rgba(${n>>16},${(n>>8)&255},${n&255},${a})`;
+}
+
+// ── Country flag helper ───────────────────────────────────────────────────────
+
+function countryFlag(cc) {
+  if (!cc || cc.length !== 2) return '';
+  const base = 0x1F1E6;
+  return String.fromCodePoint(base + cc.charCodeAt(0) - 65) +
+         String.fromCodePoint(base + cc.charCodeAt(1) - 65);
 }
 
 // ── Bandwidth helpers ─────────────────────────────────────────────────────────
@@ -1209,8 +1307,9 @@ function applyFilter(connections) {
 
 let hostMarker = null, hostLatLng = null;
 let peerMarkers = {};
-let arcMap  = {};
-let rowMap  = {};
+let arcMap   = {};
+let rowMap   = {};
+const noteCache = {};  // ip → note text
 
 // ── Arc drawing ───────────────────────────────────────────────────────────────
 
@@ -1380,9 +1479,10 @@ function popupHtml(c) {
   const srcLine  = c.threat_sources && c.threat_sources.length
     ? `<br><span style="font-size:10px">${sourceBadges(c.threat_sources)}</span>`
     : '';
+  const flag = countryFlag(c.countryCode);
   return `<b>${c.ip}</b>${torBadge}${vpnBadge}${hline}<br>
     <span style="color:#8b949e">:${c.port}</span><br>
-    ${c.city ? c.city + ', ' : ''}${c.country || '?'}<br>
+    ${flag ? flag + ' ' : ''}${c.city ? c.city + ', ' : ''}${c.country || '?'}<br>
     ${c.org || c.isp || ''}
     ${c.process ? '<br><span style="color:#3fb950">⚙ ' + c.process + '</span>' : ''}
     ${tline}${srcLine}
@@ -1449,16 +1549,45 @@ function _renderPeers(conns, threatEnabled) {
     const bwHtml  = (recvFmt || sendFmt)
       ? `<div class="bw">${recvFmt ? '↓ ' + recvFmt : ''}${recvFmt && sendFmt ? ' ' : ''}${sendFmt ? '↑ ' + sendFmt : ''}</div>`
       : '';
+    const flagStr = countryFlag(c.countryCode);
+    const cachedNote = noteCache[c.ip] || '';
     body.innerHTML = `
       <div class="ip" style="color:${color}">${c.ip}<span style="color:#484f58">:${c.port}</span>${torHtml}${vpnHtml}${agentHtml}</div>
       ${c.hostname ? `<div class="hostname">${c.hostname}</div>` : ''}
-      <div class="loc">${c.city ? c.city + ', ' : ''}${c.country || '?'} (${c.countryCode || '?'})</div>
+      <div class="loc">${flagStr ? flagStr + ' ' : ''}${c.city ? c.city + ', ' : ''}${c.country || '?'} (${c.countryCode || '?'})</div>
       ${c.process ? `<div class="proc">⚙ ${c.process}${containerHtml}</div>` : ''}
       ${c.org ? `<div class="org">&#127970; ${c.org}</div>` : ''}
+      ${c.as_name && c.as_name !== c.org ? `<div class="org" style="color:#6e7681">AS${c.asn || ''} ${c.as_name}</div>` : ''}
       ${bwHtml}
       ${score !== null ? `<div>${threatLabel(score, c.threat_reports ?? 0)}</div>` : ''}
       ${srcHtml ? `<div style="margin-top:3px">${srcHtml}</div>` : ''}
+      ${cachedNote ? `<div class="note-text">&#9998; ${cachedNote}</div>` : ''}
+      <div class="note-edit-wrap" id="note-wrap-${c.ip.replace(/[.:]/g,'_')}">
+        <textarea class="note-textarea" rows="2" placeholder="Add note…">${cachedNote}</textarea>
+        <button class="note-save-btn">Save</button>
+      </div>
     `;
+
+    // Note save
+    const noteWrap = body.querySelector('.note-edit-wrap');
+    body.querySelector('.note-save-btn').addEventListener('click', async e => {
+      e.stopPropagation();
+      const note = body.querySelector('.note-textarea').value.trim();
+      await fetch(`/api/notes/${c.ip}`, {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ note })
+      });
+      noteCache[c.ip] = note;
+      noteWrap.classList.remove('open');
+      const nt = body.querySelector('.note-text');
+      if (nt) nt.remove();
+      if (note) {
+        const nd = document.createElement('div');
+        nd.className = 'note-text';
+        nd.textContent = '✎ ' + note;
+        noteWrap.before(nd);
+      }
+    });
 
     const hbtn = document.createElement('button');
     hbtn.className = 'history-btn';
@@ -1466,7 +1595,18 @@ function _renderPeers(conns, threatEnabled) {
     hbtn.textContent = '⏱';
     hbtn.addEventListener('click', e => { e.stopPropagation(); openHistory(c.ip); });
 
+    const nbtn = document.createElement('button');
+    nbtn.className = 'note-btn';
+    nbtn.title = 'Add/edit note';
+    nbtn.textContent = '✎';
+    nbtn.addEventListener('click', e => {
+      e.stopPropagation();
+      noteWrap.classList.toggle('open');
+      if (noteWrap.classList.contains('open')) body.querySelector('.note-textarea').focus();
+    });
+
     row.appendChild(body);
+    row.appendChild(nbtn);
     row.appendChild(hbtn);
     row.addEventListener('click', () => { map.setView([c.lat, c.lon], 5); peerMarkers[c.ip].openPopup(); });
     row.addEventListener('contextmenu', e => { e.preventDefault(); showCtxMenu(e.clientX, e.clientY, c); });
@@ -1506,6 +1646,8 @@ async function refresh() {
       `<span class="label">HOST</span> &mdash; ${data.host.query} &mdash; ${data.host.city}, ${data.host.country}`;
   }
 
+  const newIps = data.connections.map(c => c.ip).filter(ip => noteCache[ip] === undefined);
+  if (newIps.length) await prefetchNotes(newIps);
   _renderPeers(data.connections, data.threat_enabled);
 
   const t = new Date(data.last_updated * 1000);
@@ -2002,12 +2144,17 @@ async function loadRules() {
 
       const item = document.createElement('div');
       item.className = 'rule-item';
+      let act = {};
+      try { act = JSON.parse(rule.action); } catch(e) {}
+      const actionLabels = { desktop: '🖥', webhook: '⛓', slack: '💬', email: '✉' };
+      const actionLabel = actionLabels[act.type] || act.type || 'desktop';
       item.innerHTML = `
         <button class="rule-toggle ${rule.enabled ? 'on' : 'off'}" data-rid="${rule.id}" data-enabled="${rule.enabled}" title="Toggle"></button>
         <div class="rule-desc">
           <div>${desc}</div>
           <div class="rule-type-tag">${rule.rule_type}</div>
         </div>
+        <span class="rule-action-badge" title="${act.type || 'desktop'}">${actionLabel}</span>
         <button class="rule-delete" data-rid="${rule.id}" title="Delete">&#10005;</button>
       `;
       list.appendChild(item);
@@ -2037,18 +2184,31 @@ document.getElementById('rules-list').addEventListener('click', async e => {
   }
 });
 
+document.getElementById('rules-action-select').addEventListener('change', e => {
+  const needsVal = ['webhook', 'slack', 'email'].includes(e.target.value);
+  const av = document.getElementById('rules-action-val');
+  av.style.display = needsVal ? '' : 'none';
+  av.placeholder = e.target.value === 'email' ? 'email address' : 'URL';
+});
+
 document.getElementById('rules-add-btn').addEventListener('click', async () => {
-  const type = document.getElementById('rules-type-select').value;
-  const val  = document.getElementById('rules-cond-val').value.trim();
+  const type      = document.getElementById('rules-type-select').value;
+  const val       = document.getElementById('rules-cond-val').value.trim();
+  const actType   = document.getElementById('rules-action-select').value;
+  const actVal    = document.getElementById('rules-action-val').value.trim();
   let cond = {};
-  if      (type === 'country')     cond = { code: val.toUpperCase() || 'XX' };
+  if      (type === 'country')      cond = { code: val.toUpperCase() || 'XX' };
   else if (type === 'threat_score') cond = { min_score: parseInt(val) || 75 };
+  let action = { type: actType };
+  if (actType === 'email')             action.to  = actVal;
+  else if (actType !== 'desktop')      action.url = actVal;
   await fetch('/api/alerts/rules', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ rule_type: type, condition: cond, action: { type: 'desktop' } })
+    body: JSON.stringify({ rule_type: type, condition: cond, action })
   });
-  document.getElementById('rules-cond-val').value = '';
+  document.getElementById('rules-cond-val').value  = '';
+  document.getElementById('rules-action-val').value = '';
   loadRules();
 });
 
@@ -2065,6 +2225,28 @@ document.getElementById('rules-close').addEventListener('click', closeRulesModal
 document.getElementById('rules-modal').addEventListener('click', e => {
   if (e.target === document.getElementById('rules-modal')) closeRulesModal();
 });
+
+// ── Export ────────────────────────────────────────────────────────────────────
+
+function exportCsv() {
+  const a = document.createElement('a');
+  a.href     = '/api/export/connections?format=csv';
+  a.download = 'connections.csv';
+  a.click();
+}
+
+// ── Notes prefetch ────────────────────────────────────────────────────────────
+
+async function prefetchNotes(ips) {
+  await Promise.all(ips.map(async ip => {
+    if (noteCache[ip] !== undefined) return;
+    try {
+      const r = await fetch(`/api/notes/${ip}`);
+      const d = await r.json();
+      noteCache[ip] = d.note || '';
+    } catch(e) { noteCache[ip] = ''; }
+  }));
+}
 
 // ── Blocked IPs panel ─────────────────────────────────────────────────────────
 

@@ -5,17 +5,29 @@ Database lives at ~/.local/share/tracemap/tracemap.db
 
 import json
 import sqlite3
+import threading as _threading
 import time
 from pathlib import Path
 
 DB_PATH = Path.home() / ".local" / "share" / "tracemap" / "tracemap.db"
 
+_tls = _threading.local()
 
 def _connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    return conn
+    db_path = str(DB_PATH)
+    if getattr(_tls, "conn", None) is None or getattr(_tls, "db_path", None) != db_path:
+        if getattr(_tls, "conn", None) is not None:
+            try:
+                _tls.conn.close()
+            except Exception:
+                pass
+        conn = sqlite3.connect(db_path, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        _tls.conn    = conn
+        _tls.db_path = db_path
+    return _tls.conn
 
 
 def init_db():
@@ -106,6 +118,24 @@ def init_db():
             CREATE TABLE IF NOT EXISTS blocked_ips (
                 ip         TEXT    PRIMARY KEY,
                 blocked_at INTEGER NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS notes (
+                ip         TEXT    PRIMARY KEY,
+                note       TEXT    NOT NULL DEFAULT '',
+                updated_at INTEGER NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS connection_hourly (
+                hour_ts    INTEGER NOT NULL,
+                ip         TEXT    NOT NULL,
+                count      INTEGER NOT NULL DEFAULT 1,
+                PRIMARY KEY (hour_ts, ip)
+            );
+
+            CREATE TABLE IF NOT EXISTS db_config (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL
             );
         """)
 
@@ -423,23 +453,54 @@ def mark_alerts_read(ids: list[int] | None = None):
 def get_timeline(window_hours: int = 24) -> list[dict]:
     now   = int(time.time())
     start = now - window_hours * 3600
+    cutoff = now - 24 * 3600  # boundary between raw log and hourly aggregates
     with _connect() as conn:
-        rows = conn.execute("""
+        # Recent: raw log
+        recent = conn.execute("""
             SELECT (seen_at / 3600) * 3600 AS hour_ts,
                    COUNT(DISTINCT ip)       AS count
             FROM connections_log
             WHERE seen_at > ?
             GROUP BY hour_ts
-            ORDER BY hour_ts ASC
-        """, (start,)).fetchall()
-    by_ts = {r["hour_ts"]: r["count"] for r in rows}
-    cur   = (start // 3600) * 3600
-    end   = (now   // 3600) * 3600
+        """, (max(start, cutoff),)).fetchall()
+        # Historical: hourly aggregates
+        hist = conn.execute("""
+            SELECT hour_ts,
+                   COUNT(DISTINCT ip) AS count
+            FROM connection_hourly
+            WHERE hour_ts > ? AND hour_ts <= ?
+            GROUP BY hour_ts
+        """, (start, cutoff)).fetchall() if start < cutoff else []
+    by_ts = {}
+    for r in hist:
+        by_ts[r["hour_ts"]] = r["count"]
+    for r in recent:
+        by_ts[r["hour_ts"]] = r["count"]
+    cur    = (start // 3600) * 3600
+    end    = (now   // 3600) * 3600
     result = []
     while cur <= end:
         result.append({"hour_ts": cur, "count": by_ts.get(cur, 0)})
         cur += 3600
     return result
+
+
+# ── hourly aggregation ─────────────────────────────────────────────────────────
+
+def aggregate_old_connections(cutoff_hours: int = 24):
+    """Collapse connections_log rows older than cutoff_hours into connection_hourly."""
+    cutoff = int(time.time()) - cutoff_hours * 3600
+    with _connect() as conn:
+        conn.execute("""
+            INSERT OR REPLACE INTO connection_hourly (hour_ts, ip, count)
+            SELECT (seen_at / 3600) * 3600 AS hour_ts,
+                   ip,
+                   COUNT(*) AS count
+            FROM connections_log
+            WHERE seen_at < ?
+            GROUP BY hour_ts, ip
+        """, (cutoff,))
+        conn.execute("DELETE FROM connections_log WHERE seen_at < ?", (cutoff,))
 
 
 # ── blocked_ips ────────────────────────────────────────────────────────────────
@@ -473,7 +534,55 @@ def get_blocked_ips() -> list[dict]:
         return [dict(r) for r in rows]
 
 
-# ── timeline / historical connections ──────────────────────────────────────────
+# ── notes ──────────────────────────────────────────────────────────────────────
+
+def get_note(ip: str) -> str:
+    with _connect() as conn:
+        row = conn.execute("SELECT note FROM notes WHERE ip = ?", (ip,)).fetchone()
+        return row["note"] if row else ""
+
+def set_note(ip: str, note: str):
+    with _connect() as conn:
+        conn.execute("""
+            INSERT OR REPLACE INTO notes (ip, note, updated_at)
+            VALUES (?, ?, ?)
+        """, (ip, note, int(time.time())))
+
+
+# ── retention ──────────────────────────────────────────────────────────────────
+
+def get_config(key: str, default: str = "") -> str:
+    with _connect() as conn:
+        row = conn.execute("SELECT value FROM db_config WHERE key = ?", (key,)).fetchone()
+        return row["value"] if row else default
+
+def set_config(key: str, value: str):
+    with _connect() as conn:
+        conn.execute("INSERT OR REPLACE INTO db_config (key, value) VALUES (?, ?)", (key, value))
+
+def prune_old_connections(days: int):
+    cutoff = int(time.time()) - days * 86400
+    with _connect() as conn:
+        conn.execute("DELETE FROM connections_log WHERE seen_at < ?", (cutoff,))
+
+def get_db_stats() -> dict:
+    with _connect() as conn:
+        rows = conn.execute("""
+            SELECT name FROM sqlite_master WHERE type='table'
+        """).fetchall()
+        counts = {}
+        for r in rows:
+            n = r["name"]
+            c = conn.execute(f"SELECT COUNT(*) AS n FROM {n}").fetchone()["n"]
+            counts[n] = c
+        oldest = conn.execute(
+            "SELECT MIN(seen_at) AS t FROM connections_log"
+        ).fetchone()["t"]
+    size = DB_PATH.stat().st_size if DB_PATH.exists() else 0
+    return {"table_counts": counts, "db_size_bytes": size, "oldest_entry": oldest}
+
+
+# ── timeline / historical connections (at timestamp) ───────────────────────────
 
 def get_connections_at(timestamp: int, window: int = 300) -> list[dict]:
     lo = timestamp - window
@@ -491,4 +600,31 @@ def get_connections_at(timestamp: int, window: int = 300) -> list[dict]:
             GROUP BY cl.ip, cl.port
             ORDER BY seen_at DESC
         """, (lo, hi)).fetchall()
+        return [dict(r) for r in rows]
+
+
+# ── export ─────────────────────────────────────────────────────────────────────
+
+def export_connections(since: int = 0) -> list[dict]:
+    with _connect() as conn:
+        rows = conn.execute("""
+            SELECT cl.ip, cl.port, cl.local_port, cl.process, cl.seen_at,
+                   g.country, g.countryCode, g.city, g.org
+            FROM connections_log cl
+            LEFT JOIN geo_cache g ON cl.ip = g.ip
+            WHERE cl.seen_at > ?
+            ORDER BY cl.seen_at DESC
+        """, (since,)).fetchall()
+        return [dict(r) for r in rows]
+
+def export_threats() -> list[dict]:
+    with _connect() as conn:
+        rows = conn.execute("""
+            SELECT tc.ip, tc.abuse_score, tc.reports, tc.checked_at,
+                   g.country, g.countryCode, g.org
+            FROM threat_cache tc
+            LEFT JOIN geo_cache g ON tc.ip = g.ip
+            WHERE tc.abuse_score > 0
+            ORDER BY tc.abuse_score DESC
+        """).fetchall()
         return [dict(r) for r in rows]
