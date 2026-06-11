@@ -16,6 +16,7 @@ from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 import collector
 import db
+import geo
 import threat
 import firewall
 import agent
@@ -241,7 +242,11 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(db.get_db_stats())
 
         elif path == "/api/geo/status":
-            self._json({"source": "ip-api.com"})
+            if geo.is_offline():
+                source = "MaxMind GeoLite2 (offline)"
+            else:
+                source = "ip-api.com (online)"
+            self._json({"source": source})
 
         elif path == "/api/auth/status":
             self._json({"auth_required": API_KEY is not None})

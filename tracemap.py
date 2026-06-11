@@ -10,6 +10,7 @@ import time
 import webbrowser
 import db
 import collector
+import geo
 import threat
 import reputation
 import alerts
@@ -46,6 +47,10 @@ def main():
                         help="Delete connection log entries older than N days (0 = keep forever)")
     parser.add_argument("--api-key",     metavar="KEY",
                         help="Require X-Api-Key header on all API requests")
+    parser.add_argument("--geoip-db",   metavar="PATH",
+                        help="Path to GeoLite2-City.mmdb for offline geolocation")
+    parser.add_argument("--geoip-asn",  metavar="PATH",
+                        help="Path to GeoLite2-ASN.mmdb for offline ASN lookup")
     args = parser.parse_args()
 
     server.PORT = args.port
@@ -58,6 +63,8 @@ def main():
     if args.history_days > 0:
         db.prune_connection_log(args.history_days)
         threading.Thread(target=_prune_loop, args=(args.history_days,), daemon=True).start()
+
+    geo.set_geoip_paths(args.geoip_db, args.geoip_asn)
 
     if args.alerts_file:
         alerts.load_rules_from_file(args.alerts_file)
