@@ -14,7 +14,44 @@ body {
   height: 100vh;
   overflow: hidden;
 }
-#map { flex: 1; }
+#map-container { flex: 1; position: relative; }
+#map { width: 100%; height: 100%; }
+#graph-view {
+  display: none;
+  width: 100%;
+  height: 100%;
+  background: #0d1117;
+  position: absolute;
+  top: 0; left: 0;
+}
+#graph-view.visible { display: block; }
+#graph-svg { width: 100%; height: 100%; display: block; }
+
+/* ── Map toolbar ── */
+#map-toolbar {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.map-btn {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 4px;
+  color: #8b949e;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 10px;
+  padding: 5px 8px;
+  white-space: nowrap;
+  transition: border-color 0.12s, color 0.12s, background 0.12s;
+}
+.map-btn:hover { border-color: #8b949e; color: #c9d1d9; }
+.map-btn.active { border-color: #58a6ff; color: #58a6ff; background: rgba(88,166,255,0.1); }
+
 #sidebar {
   width: 300px;
   background: #161b22;
@@ -31,13 +68,32 @@ body {
   border-bottom: 1px solid #30363d;
   flex-shrink: 0;
 }
+#header-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
 #header h1 {
   font-size: 11px;
   letter-spacing: 3px;
   text-transform: uppercase;
   color: #58a6ff;
-  margin-bottom: 4px;
 }
+.header-btn {
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 4px;
+  color: #8b949e;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 10px;
+  padding: 3px 8px;
+  transition: border-color 0.12s, color 0.12s, background 0.12s;
+  white-space: nowrap;
+}
+.header-btn:hover { border-color: #8b949e; color: #c9d1d9; }
+.header-btn.active { border-color: #58a6ff; color: #58a6ff; background: rgba(88,166,255,0.1); }
 #stats { font-size: 11px; color: #8b949e; }
 
 /* ── Host info ── */
@@ -294,13 +350,42 @@ body {
   transition: border-color 0.12s, color 0.12s;
 }
 .trace-btn:hover { border-color: #58a6ff; color: #58a6ff; }
+
+/* ── Graph tooltip ── */
+#graph-tooltip {
+  position: absolute;
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  color: #c9d1d9;
+  font-size: 11px;
+  padding: 8px 10px;
+  pointer-events: none;
+  display: none;
+  z-index: 100;
+  max-width: 200px;
+  line-height: 1.5;
+}
+#graph-tooltip b { color: #58a6ff; }
 </style>
 </head>
 <body>
-<div id="map"></div>
+<div id="map-container">
+  <div id="map"></div>
+  <div id="graph-view">
+    <svg id="graph-svg"></svg>
+    <div id="graph-tooltip"></div>
+  </div>
+  <div id="map-toolbar">
+    <button class="map-btn" id="heatmap-btn" title="Toggle heatmap density overlay">Heatmap</button>
+  </div>
+</div>
 <div id="sidebar">
   <div id="header">
-    <h1>Network Trace Map</h1>
+    <div id="header-top">
+      <h1>Network Trace Map</h1>
+      <button class="header-btn" id="graph-toggle-btn" title="Switch to graph topology view">Graph</button>
+    </div>
     <div id="stats">Connecting&hellip;</div>
   </div>
   <div id="host-info"><span class="label">HOST</span> &mdash; loading&hellip;</div>
@@ -682,6 +767,298 @@ function popupHtml(c) {
     <button class="trace-btn" onclick="startTrace('${c.ip}')">trace route</button>`;
 }
 
+// ── Geo Heatmap ───────────────────────────────────────────────────────────────
+
+let heatLayer    = L.layerGroup();
+let heatVisible  = false;
+
+function heatColor(score) {
+  if (score >= 75) return '#e74c3c';
+  if (score >= 25) return '#f39c12';
+  return '#2ecc71';
+}
+
+function heatRadius(score) {
+  if (score == null) return 10;
+  return Math.min(30, Math.max(8, 8 + (score / 100) * 22));
+}
+
+function buildHeatmap(connections) {
+  heatLayer.clearLayers();
+  connections.forEach(c => {
+    if (c.lat == null || c.lon == null) return;
+    const score = c.abuse_score ?? 0;
+    L.circleMarker([c.lat, c.lon], {
+      radius:      heatRadius(score),
+      fillColor:   heatColor(score),
+      fillOpacity: 0.35,
+      stroke:      false
+    }).addTo(heatLayer);
+  });
+}
+
+const heatmapBtn = document.getElementById('heatmap-btn');
+heatmapBtn.addEventListener('click', () => {
+  heatVisible = !heatVisible;
+  heatmapBtn.classList.toggle('active', heatVisible);
+  if (heatVisible) {
+    heatLayer.addTo(map);
+    if (lastData) buildHeatmap(lastData.connections);
+  } else {
+    map.removeLayer(heatLayer);
+  }
+});
+
+// ── Graph View ────────────────────────────────────────────────────────────────
+
+let graphVisible = false;
+let graphAnimId  = null;
+
+const graphToggleBtn = document.getElementById('graph-toggle-btn');
+const graphView      = document.getElementById('graph-view');
+const graphSvg       = document.getElementById('graph-svg');
+const graphTooltip   = document.getElementById('graph-tooltip');
+
+graphToggleBtn.addEventListener('click', () => {
+  graphVisible = !graphVisible;
+  graphToggleBtn.classList.toggle('active', graphVisible);
+  graphView.classList.toggle('visible', graphVisible);
+  if (graphVisible && lastData) drawGraph(lastData);
+});
+
+function svgEl(tag, attrs) {
+  const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
+  Object.entries(attrs).forEach(([k, v]) => el.setAttribute(k, v));
+  return el;
+}
+
+function drawGraph(data) {
+  if (graphAnimId) { cancelAnimationFrame(graphAnimId); graphAnimId = null; }
+  graphSvg.innerHTML = '';
+
+  const W = graphView.clientWidth  || 800;
+  const H = graphView.clientHeight || 600;
+  graphSvg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+
+  const connections = data.connections || [];
+  const hostCity    = (data.host && data.host.city) ? data.host.city : 'HOST';
+
+  // ── Build node/edge lists ────────────────────────────────────────────────
+  const procs    = [...new Set(connections.map(c => c.process).filter(Boolean))];
+  const ipSet    = [...new Set(connections.map(c => c.ip))];
+  const ipMeta   = {};
+  connections.forEach(c => { ipMeta[c.ip] = c; });
+
+  // Nodes: host (idx 0), processes (1..P), ips (P+1..)
+  const nodes = [];
+  // Host node
+  nodes.push({ id: 'host', type: 'host', label: hostCity, x: W/2, y: H/2, vx: 0, vy: 0 });
+
+  // Process nodes — spread in inner ring
+  procs.forEach((proc, i) => {
+    const angle = (2 * Math.PI * i / Math.max(procs.length, 1)) - Math.PI/2;
+    const r = Math.min(W, H) * 0.22;
+    nodes.push({
+      id: 'proc:' + proc, type: 'proc', label: proc,
+      x: W/2 + Math.cos(angle) * r,
+      y: H/2 + Math.sin(angle) * r,
+      vx: 0, vy: 0, color: procColor(proc)
+    });
+  });
+
+  // IP nodes — spread in outer ring
+  ipSet.forEach((ip, i) => {
+    const angle = (2 * Math.PI * i / Math.max(ipSet.length, 1)) - Math.PI/2;
+    const r = Math.min(W, H) * 0.42;
+    const c = ipMeta[ip];
+    const lvl = threatLevel(c ? c.abuse_score : null);
+    const col = lvl === 'high' ? '#f85149' : lvl === 'med' ? '#f0883e' : '#58a6ff';
+    nodes.push({
+      id: 'ip:' + ip, type: 'ip', label: ip,
+      x: W/2 + Math.cos(angle) * r,
+      y: H/2 + Math.sin(angle) * r,
+      vx: 0, vy: 0, color: col, meta: c
+    });
+  });
+
+  const nodeIdx = {};
+  nodes.forEach((n, i) => { nodeIdx[n.id] = i; });
+
+  // Edges
+  const edges = [];
+  procs.forEach(proc => {
+    edges.push({ a: nodeIdx['host'], b: nodeIdx['proc:' + proc], thick: true });
+  });
+  connections.forEach(c => {
+    const pKey = c.process ? 'proc:' + c.process : 'host';
+    const src  = nodeIdx[pKey] !== undefined ? nodeIdx[pKey] : nodeIdx['host'];
+    const dst  = nodeIdx['ip:' + c.ip];
+    if (dst !== undefined) {
+      edges.push({ a: src, b: dst, thick: false, port: c.port });
+    }
+  });
+
+  // ── SVG structure: defs, edges layer, nodes layer ────────────────────────
+  const edgeGroup = svgEl('g', { id: 'edges' });
+  const nodeGroup = svgEl('g', { id: 'nodes' });
+  graphSvg.appendChild(edgeGroup);
+  graphSvg.appendChild(nodeGroup);
+
+  // Pre-create edge lines
+  const edgeEls = edges.map(e => {
+    const line = svgEl('line', {
+      stroke: e.thick ? '#484f58' : '#2d333b',
+      'stroke-width': e.thick ? 2 : 1,
+      'stroke-opacity': 0.7
+    });
+    edgeGroup.appendChild(line);
+    return line;
+  });
+
+  // Pre-create node circles + labels
+  const nodeEls = nodes.map(n => {
+    const g = svgEl('g', { style: 'cursor:default' });
+
+    let r, fill, stroke;
+    if (n.type === 'host') {
+      r = 18; fill = '#3fb950'; stroke = '#fff';
+    } else if (n.type === 'proc') {
+      r = 12; fill = n.color; stroke = 'rgba(255,255,255,0.3)';
+    } else {
+      r = 7; fill = n.color; stroke = 'rgba(255,255,255,0.2)';
+    }
+
+    const circle = svgEl('circle', {
+      r, fill,
+      stroke, 'stroke-width': 1.5,
+      filter: n.type === 'host' ? 'url(#glow)' : ''
+    });
+    g.appendChild(circle);
+
+    const text = svgEl('text', {
+      'text-anchor': 'middle',
+      'dominant-baseline': 'central',
+      fill: '#c9d1d9',
+      'font-family': "'SF Mono','Fira Code','Consolas',monospace",
+      'font-size': n.type === 'host' ? '9' : n.type === 'proc' ? '8' : '7',
+      dy: n.type === 'ip' ? (r + 10) : 0,
+      'pointer-events': 'none'
+    });
+    text.textContent = n.type === 'ip' ? n.label : n.label;
+    g.appendChild(text);
+
+    // IP hover tooltip
+    if (n.type === 'ip' && n.meta) {
+      const meta = n.meta;
+      g.addEventListener('mouseenter', (evt) => {
+        const score = meta.abuse_score != null ? meta.abuse_score : 'N/A';
+        const country = meta.country || '?';
+        const org = meta.org || meta.isp || '?';
+        graphTooltip.innerHTML =
+          `<b>${meta.ip}</b><br>${country}<br>${org}<br>abuse score: ${score}`;
+        graphTooltip.style.display = 'block';
+      });
+      g.addEventListener('mousemove', (evt) => {
+        const rect = graphView.getBoundingClientRect();
+        let tx = evt.clientX - rect.left + 12;
+        let ty = evt.clientY - rect.top  + 12;
+        if (tx + 210 > W) tx = evt.clientX - rect.left - 215;
+        graphTooltip.style.left = tx + 'px';
+        graphTooltip.style.top  = ty + 'px';
+      });
+      g.addEventListener('mouseleave', () => {
+        graphTooltip.style.display = 'none';
+      });
+    }
+
+    nodeGroup.appendChild(g);
+    return g;
+  });
+
+  // Glow filter for host
+  const defs = svgEl('defs', {});
+  const filt = svgEl('filter', { id: 'glow', x: '-50%', y: '-50%', width: '200%', height: '200%' });
+  const fe   = svgEl('feDropShadow', { dx: '0', dy: '0', stdDeviation: '4', 'flood-color': '#3fb950', 'flood-opacity': '0.8' });
+  filt.appendChild(fe);
+  defs.appendChild(filt);
+  graphSvg.insertBefore(defs, graphSvg.firstChild);
+
+  // ── Force simulation ──────────────────────────────────────────────────────
+  const K_REPEL  = 3500;
+  const K_SPRING = 0.035;
+  const REST_LEN_THICK = Math.min(W, H) * 0.22;
+  const REST_LEN_THIN  = Math.min(W, H) * 0.20;
+  const DRAG     = 0.82;
+  const MAX_FRAMES = 200;
+  let frame = 0;
+
+  function tick() {
+    // Repulsion between all pairs
+    for (let i = 0; i < nodes.length; i++) {
+      for (let j = i + 1; j < nodes.length; j++) {
+        const ni = nodes[i], nj = nodes[j];
+        let dx = ni.x - nj.x, dy = ni.y - nj.y;
+        const dist2 = Math.max(dx*dx + dy*dy, 1);
+        const dist  = Math.sqrt(dist2);
+        const f     = K_REPEL / dist2;
+        const fx    = f * dx / dist;
+        const fy    = f * dy / dist;
+        ni.vx += fx; ni.vy += fy;
+        nj.vx -= fx; nj.vy -= fy;
+      }
+    }
+
+    // Spring attraction along edges
+    edges.forEach(e => {
+      const na = nodes[e.a], nb = nodes[e.b];
+      const dx   = nb.x - na.x, dy = nb.y - na.y;
+      const dist = Math.max(Math.sqrt(dx*dx + dy*dy), 1);
+      const rest = e.thick ? REST_LEN_THICK : REST_LEN_THIN;
+      const f    = K_SPRING * (dist - rest);
+      const fx   = f * dx / dist;
+      const fy   = f * dy / dist;
+      na.vx += fx; na.vy += fy;
+      nb.vx -= fx; nb.vy -= fy;
+    });
+
+    // Pin host node to center
+    nodes[0].x = W / 2;
+    nodes[0].y = H / 2;
+    nodes[0].vx = 0;
+    nodes[0].vy = 0;
+
+    // Integrate + drag + bound
+    for (let i = 1; i < nodes.length; i++) {
+      const n = nodes[i];
+      n.vx *= DRAG; n.vy *= DRAG;
+      n.x  += n.vx; n.y  += n.vy;
+      n.x   = Math.max(30, Math.min(W - 30, n.x));
+      n.y   = Math.max(30, Math.min(H - 30, n.y));
+    }
+
+    // Update DOM
+    edgeEls.forEach((el, i) => {
+      const e = edges[i];
+      el.setAttribute('x1', nodes[e.a].x);
+      el.setAttribute('y1', nodes[e.a].y);
+      el.setAttribute('x2', nodes[e.b].x);
+      el.setAttribute('y2', nodes[e.b].y);
+    });
+    nodeEls.forEach((g, i) => {
+      g.setAttribute('transform', `translate(${nodes[i].x},${nodes[i].y})`);
+    });
+
+    frame++;
+    if (frame < MAX_FRAMES) {
+      graphAnimId = requestAnimationFrame(tick);
+    } else {
+      graphAnimId = null;
+    }
+  }
+
+  graphAnimId = requestAnimationFrame(tick);
+}
+
 // ── Main refresh loop ─────────────────────────────────────────────────────────
 
 async function refresh() {
@@ -769,6 +1146,12 @@ async function refresh() {
 
   renderChips(data.connections, data.threat_enabled);
   applyFilter(data.connections);
+
+  // Update heatmap if visible
+  if (heatVisible) buildHeatmap(data.connections);
+
+  // Update graph if visible
+  if (graphVisible) drawGraph(data);
 
   const t = new Date(data.last_updated * 1000);
   const total = data.connections.length;
