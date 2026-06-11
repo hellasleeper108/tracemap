@@ -49,9 +49,14 @@ class _Handler(BaseHTTPRequestHandler):
             return {}
 
     def do_GET(self):
+        path, params = self._parse_path()
+
+        # /metrics is unauthenticated — Prometheus scrapers don't use API keys
+        if path == "/metrics":
+            return self._prometheus_metrics()
+
         if not self._check_agent_auth():
             return self._error(401, "unauthorized")
-        path, params = self._parse_path()
 
         if path in ("/", "/index.html"):
             self._serve_file(STATIC_DIR / "index.html", "text/html; charset=utf-8")
@@ -312,6 +317,49 @@ class _Handler(BaseHTTPRequestHandler):
 
         else:
             self._error(404, "not found")
+
+    def _prometheus_metrics(self):
+        conns = collector.get_state()["connections"]
+        malicious  = sum(1 for c in conns if (c.get("abuse_score") or 0) >= 75)
+        suspicious = sum(1 for c in conns if 25 <= (c.get("abuse_score") or 0) < 75)
+        tor_count  = sum(1 for c in conns if c.get("is_tor"))
+        bw_recv    = sum(c.get("recv_bps", 0) for c in conns)
+        bw_send    = sum(c.get("send_bps", 0) for c in conns)
+        unique_ips = len({c["ip"] for c in conns if c.get("ip")})
+        blocked    = len(db.get_blocked_ips())
+
+        lines = [
+            "# HELP tracemap_connections_total Current number of active connections",
+            "# TYPE tracemap_connections_total gauge",
+            f"tracemap_connections_total {len(conns)}",
+            "# HELP tracemap_unique_ips_total Current number of unique IPs",
+            "# TYPE tracemap_unique_ips_total gauge",
+            f"tracemap_unique_ips_total {unique_ips}",
+            "# HELP tracemap_threats_malicious Connections with abuse_score >= 75",
+            "# TYPE tracemap_threats_malicious gauge",
+            f"tracemap_threats_malicious {malicious}",
+            "# HELP tracemap_threats_suspicious Connections with abuse_score 25-74",
+            "# TYPE tracemap_threats_suspicious gauge",
+            f"tracemap_threats_suspicious {suspicious}",
+            "# HELP tracemap_blocked_ips_total Number of blocked IPs",
+            "# TYPE tracemap_blocked_ips_total gauge",
+            f"tracemap_blocked_ips_total {blocked}",
+            "# HELP tracemap_tor_connections Connections flagged as Tor exit nodes",
+            "# TYPE tracemap_tor_connections gauge",
+            f"tracemap_tor_connections {tor_count}",
+            "# HELP tracemap_bw_recv_bytes_total Sum of recv_bps across all connections",
+            "# TYPE tracemap_bw_recv_bytes_total gauge",
+            f"tracemap_bw_recv_bytes_total {bw_recv}",
+            "# HELP tracemap_bw_send_bytes_total Sum of send_bps across all connections",
+            "# TYPE tracemap_bw_send_bytes_total gauge",
+            f"tracemap_bw_send_bytes_total {bw_send}",
+        ]
+        body = ("\n".join(lines) + "\n").encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def _serve_file(self, path: Path, content_type: str):
         try:

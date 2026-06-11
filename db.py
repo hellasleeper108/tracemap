@@ -521,6 +521,17 @@ def set_note(ip: str, note: str):
         """, (ip, note, int(time.time())))
 
 
+# ── connection log retention ───────────────────────────────────────────────────
+
+def prune_connection_log(days: int):
+    """Delete connections_log rows older than `days` days. No-op if days <= 0."""
+    if days <= 0:
+        return
+    cutoff = int(time.time()) - days * 86400
+    with _connect() as conn:
+        conn.execute("DELETE FROM connections_log WHERE seen_at < ?", (cutoff,))
+
+
 # ── export helpers ─────────────────────────────────────────────────────────────
 
 def get_all_threats(limit: int = 500) -> list[dict]:
