@@ -502,3 +502,101 @@ class TestServerRouting(unittest.TestCase):
         data = json.loads(body)
         self.assertIn("top_containers", data)
         self.assertIsInstance(data["top_containers"], list)
+
+    # ── /api/auth/status ──────────────────────────────────────────────────────
+
+    def test_auth_status_returns_200(self):
+        status, _, _ = self._get("/api/auth/status")
+        self.assertEqual(status, 200)
+
+    def test_auth_status_auth_not_required_by_default(self):
+        _, _, body = self._get("/api/auth/status")
+        data = json.loads(body)
+        self.assertIn("auth_required", data)
+        self.assertFalse(data["auth_required"])
+
+    def test_auth_status_auth_required_when_api_key_set(self):
+        import server as srv
+        original = srv.API_KEY
+        try:
+            srv.API_KEY = "secret-test-key"
+            conn = http.client.HTTPConnection("localhost", TEST_PORT, timeout=5)
+            conn.request("GET", "/api/auth/status",
+                         headers={"X-Api-Key": "secret-test-key"})
+            resp = conn.getresponse()
+            body = resp.read()
+            conn.close()
+            self.assertEqual(resp.status, 200)
+            data = json.loads(body)
+            self.assertTrue(data["auth_required"])
+        finally:
+            srv.API_KEY = original
+
+    def test_api_key_blocks_request_without_header(self):
+        import server as srv
+        original = srv.API_KEY
+        try:
+            srv.API_KEY = "secret-test-key"
+            # Request without the X-Api-Key header should be rejected
+            conn = http.client.HTTPConnection("localhost", TEST_PORT, timeout=5)
+            conn.request("GET", "/api/connections")
+            resp = conn.getresponse()
+            resp.read()
+            conn.close()
+            self.assertEqual(resp.status, 401)
+        finally:
+            srv.API_KEY = original
+
+    def test_api_key_allows_request_with_correct_header(self):
+        import server as srv
+        original = srv.API_KEY
+        try:
+            srv.API_KEY = "secret-test-key"
+            conn = http.client.HTTPConnection("localhost", TEST_PORT, timeout=5)
+            conn.request("GET", "/api/connections",
+                         headers={"X-Api-Key": "secret-test-key"})
+            resp = conn.getresponse()
+            resp.read()
+            conn.close()
+            self.assertEqual(resp.status, 200)
+        finally:
+            srv.API_KEY = original
+
+    def test_api_key_rejects_wrong_header_value(self):
+        import server as srv
+        original = srv.API_KEY
+        try:
+            srv.API_KEY = "secret-test-key"
+            conn = http.client.HTTPConnection("localhost", TEST_PORT, timeout=5)
+            conn.request("GET", "/api/connections",
+                         headers={"X-Api-Key": "wrong-key"})
+            resp = conn.getresponse()
+            resp.read()
+            conn.close()
+            self.assertEqual(resp.status, 401)
+        finally:
+            srv.API_KEY = original
+
+    # ── /api/tls/<ip> ─────────────────────────────────────────────────────────
+
+    def test_tls_endpoint_returns_200(self):
+        status, _, _ = self._get("/api/tls/8.8.8.8")
+        self.assertEqual(status, 200)
+
+    def test_tls_endpoint_has_required_keys(self):
+        _, _, body = self._get("/api/tls/8.8.8.8")
+        data = json.loads(body)
+        self.assertIn("ip", data)
+        self.assertIn("port", data)
+        self.assertIn("tls", data)
+
+    def test_tls_endpoint_correct_ip_and_port(self):
+        _, _, body = self._get("/api/tls/8.8.8.8")
+        data = json.loads(body)
+        self.assertEqual(data["ip"], "8.8.8.8")
+        self.assertEqual(data["port"], 443)
+        self.assertTrue(data["tls"])
+
+    def test_tls_endpoint_missing_ip_returns_400(self):
+        status, _, _ = self._get("/api/tls/")
+        self.assertEqual(status, 400)

@@ -44,6 +44,8 @@ def main():
                         help="Hub mode: JSON file listing remote agents to poll")
     parser.add_argument("--history-days", type=int, default=30,
                         help="Delete connection log entries older than N days (0 = keep forever)")
+    parser.add_argument("--api-key",     metavar="KEY",
+                        help="Require X-Api-Key header on all API requests")
     args = parser.parse_args()
 
     server.PORT = args.port
@@ -59,6 +61,9 @@ def main():
 
     if args.alerts_file:
         alerts.load_rules_from_file(args.alerts_file)
+
+    if args.api_key:
+        server.API_KEY = args.api_key
 
     bind_host = "localhost"
     if args.agent or args.hub:
