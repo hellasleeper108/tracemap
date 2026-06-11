@@ -16,6 +16,7 @@ import threat
 import firewall
 import agent
 import traceroute as tr
+import tls_fingerprint
 
 REPORTS_DIR = Path.home() / ".local" / "share" / "tracemap" / "reports"
 
@@ -23,6 +24,7 @@ PORT        = 9999
 STATIC_DIR  = Path(__file__).parent / "static"
 AGENT_MODE  = False   # set True by --agent flag; enables API-key auth
 HUB_MODE    = False   # set True by --hub flag; merges remote connections
+API_KEY: str | None = None   # set via tracemap.py --api-key flag
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -30,9 +32,16 @@ class _Handler(BaseHTTPRequestHandler):
         pass  # silence access log
 
     def _check_agent_auth(self) -> bool:
-        if not AGENT_MODE:
-            return True
-        return agent.check_auth(self.headers.get("X-Agent-Key"))
+        # Global API key check (applies to ALL endpoints when API_KEY is set).
+        # /metrics is exempt (Prometheus scrapers typically cannot set custom headers).
+        path = urlparse(self.path).path
+        if API_KEY is not None and path != "/metrics":
+            if self.headers.get("X-Api-Key") != API_KEY:
+                return False
+        # Legacy agent-mode key check (X-Agent-Key header, agent mode only).
+        if AGENT_MODE:
+            return agent.check_auth(self.headers.get("X-Agent-Key"))
+        return True
 
     def _parse_path(self) -> tuple[str, dict]:
         """Return (path_without_qs, {param: [val, ...]} dict)."""
@@ -200,6 +209,15 @@ class _Handler(BaseHTTPRequestHandler):
 
         elif path == "/api/geo/status":
             self._json({"source": "ip-api.com"})
+
+        elif path == "/api/auth/status":
+            self._json({"auth_required": API_KEY is not None})
+
+        elif path.startswith("/api/tls/"):
+            ip = path.removeprefix("/api/tls/")
+            if not ip:
+                return self._error(400, "missing ip")
+            self._json(tls_fingerprint.get_tls_info(ip, "443"))
 
         else:
             self._error(404, "not found")
