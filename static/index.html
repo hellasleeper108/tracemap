@@ -294,7 +294,21 @@ body {
   font-size: 10px;
   color: #484f58;
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
 }
+#ws-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: #484f58;
+  transition: background 0.3s;
+}
+#ws-dot.live    { background: #3fb950; box-shadow: 0 0 4px #3fb950; }
+#ws-dot.polling { background: #e3b341; }
 ::-webkit-scrollbar { width: 3px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: #30363d; border-radius: 2px; }
@@ -860,7 +874,7 @@ body {
     <div class="row"><div class="dot" style="background:#f0883e"></div> Suspicious (score 25&ndash;74)</div>
     <div class="row"><div class="dot" style="background:#e3b341"></div> Low risk (score 1&ndash;24)</div>
   </div>
-  <div id="footer">Refreshes every 5s &bull; ip-api.com &bull; abuseipdb.com &bull; Tor/VPN detection</div>
+  <div id="footer"><span id="ws-dot"></span><span id="ws-label">connecting&hellip;</span> &bull; ip-api.com &bull; abuseipdb.com &bull; Tor/VPN detection</div>
 
   <!-- IP history panel (slides up from bottom) -->
   <div id="history-panel">
@@ -2127,8 +2141,94 @@ document.getElementById('blocked-list').addEventListener('click', async e => {
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
 
-refresh();
-setInterval(refresh, 5000);
+// WebSocket push (falls back to 5-second polling on close/error)
+let _pollInterval = null;
+
+function _setWsStatus(mode) {
+  // mode: 'live' | 'polling' | 'connecting'
+  const dot   = document.getElementById('ws-dot');
+  const label = document.getElementById('ws-label');
+  if (mode === 'live') {
+    dot.className   = 'live';
+    label.textContent = 'live (WS)';
+  } else if (mode === 'polling') {
+    dot.className   = 'polling';
+    label.textContent = 'polling (5s)';
+  } else {
+    dot.className   = '';
+    label.textContent = 'connecting…';
+  }
+}
+
+function _startPollingFallback() {
+  if (_pollInterval) return;            // already running
+  _setWsStatus('polling');
+  refresh();                            // immediate refresh
+  _pollInterval = setInterval(refresh, 5000);
+}
+
+function _stopPollingFallback() {
+  if (_pollInterval) { clearInterval(_pollInterval); _pollInterval = null; }
+}
+
+function _connectWs() {
+  const port = window.location.port || 9999;
+  const host = window.location.hostname || 'localhost';
+  let ws;
+  try {
+    ws = new WebSocket('ws://' + host + ':' + port + '/ws/connections');
+  } catch(e) {
+    _startPollingFallback();
+    return;
+  }
+
+  ws.onopen = function() {
+    _stopPollingFallback();
+    _setWsStatus('live');
+  };
+
+  ws.onmessage = function(evt) {
+    let data;
+    try { data = JSON.parse(evt.data); } catch(e) { return; }
+    // Feed the same render pipeline as refresh()
+    if (histMode) return;
+    lastData = data;
+    document.getElementById('threat-legend').classList.toggle('visible', !!data.threat_enabled);
+    if (data.host && data.host.lat && !hostMarker) {
+      hostLatLng = [data.host.lat, data.host.lon];
+      hostMarker = L.marker(hostLatLng, { icon: hostIcon, zIndexOffset: 1000 })
+        .addTo(map)
+        .bindPopup('<b>YOU</b><br>' + data.host.query + '<br>' + data.host.city + ', ' + data.host.country);
+      document.getElementById('host-info').innerHTML =
+        '<span class="label">HOST</span> &mdash; ' + data.host.query + ' &mdash; ' + data.host.city + ', ' + data.host.country;
+    }
+    _renderPeers(data.connections, data.threat_enabled);
+    const t = new Date(data.last_updated * 1000);
+    const total = data.connections.length;
+    document.getElementById('stats').textContent =
+      total + ' connection' + (total !== 1 ? 's' : '') + ' · ' + t.toLocaleTimeString();
+    refreshStats();
+    pollAlerts();
+  };
+
+  ws.onerror = function() {
+    _startPollingFallback();
+  };
+
+  ws.onclose = function() {
+    _setWsStatus('polling');
+    _startPollingFallback();
+    // Attempt to reconnect after 10s
+    setTimeout(function() {
+      if (_pollInterval) { _stopPollingFallback(); }
+      _connectWs();
+    }, 10000);
+  };
+}
+
+_setWsStatus('connecting');
+_connectWs();
+// Keep polling as a safety net for browsers that block WS (also used as fallback)
 loadTimeline();
 setInterval(loadTimeline, 60000);
 </script>
