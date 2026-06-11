@@ -2,20 +2,42 @@
 server.py — HTTP server, request routing, and JSON API.
 """
 
+import base64
 import csv
+import hashlib
 import io
 import json
+import struct
+import threading
+import time
 from collections import Counter
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
-import time
 import collector
 import db
 import threat
 import firewall
 import agent
 import traceroute as tr
+
+# RFC 6455 WebSocket GUID
+_WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+
+
+def _ws_encode_frame(payload: bytes) -> bytes:
+    """Encode a WebSocket text frame (RFC 6455 §5.2).
+
+    Server frames are NOT masked. Byte 0: 0x81 (FIN=1, opcode=1 text).
+    """
+    length = len(payload)
+    if length <= 125:
+        header = struct.pack("BB", 0x81, length)
+    elif length <= 65535:
+        header = struct.pack("!BBH", 0x81, 126, length)
+    else:
+        header = struct.pack("!BBQ", 0x81, 127, length)
+    return header + payload
 
 REPORTS_DIR = Path.home() / ".local" / "share" / "tracemap" / "reports"
 
@@ -51,6 +73,11 @@ class _Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if not self._check_agent_auth():
             return self._error(401, "unauthorized")
+
+        # WebSocket upgrade check
+        if self.headers.get("Upgrade", "").lower() == "websocket":
+            return self._ws_upgrade()
+
         path, params = self._parse_path()
 
         if path in ("/", "/index.html"):
@@ -313,6 +340,43 @@ class _Handler(BaseHTTPRequestHandler):
         else:
             self._error(404, "not found")
 
+    def _ws_upgrade(self):
+        """Handle WebSocket upgrade and push loop for /ws/connections."""
+        path, _ = self._parse_path()
+        if path != "/ws/connections":
+            self._error(404, "not found")
+            return
+
+        key = self.headers.get("Sec-WebSocket-Key", "").strip()
+        if not key:
+            self._error(400, "missing Sec-WebSocket-Key")
+            return
+
+        # Compute accept key per RFC 6455 §1.3
+        accept = base64.b64encode(
+            hashlib.sha1((key + _WS_GUID).encode()).digest()
+        ).decode()
+
+        # Send 101 Switching Protocols
+        self.send_response(101, "Switching Protocols")
+        self.send_header("Upgrade", "websocket")
+        self.send_header("Connection", "Upgrade")
+        self.send_header("Sec-WebSocket-Accept", accept)
+        self.end_headers()
+        self.wfile.flush()
+
+        # Push loop — blocks this per-request thread (ThreadingHTTPServer, daemon_threads=True)
+        while True:
+            try:
+                state   = collector.get_state()
+                payload = json.dumps(state).encode("utf-8")
+                frame   = _ws_encode_frame(payload)
+                self.wfile.write(frame)
+                self.wfile.flush()
+                time.sleep(1)
+            except Exception:
+                break
+
     def _serve_file(self, path: Path, content_type: str):
         try:
             body = path.read_bytes()
@@ -364,6 +428,8 @@ class _Handler(BaseHTTPRequestHandler):
 
 
 def run(host: str = "localhost"):
-    HTTPServer.allow_reuse_address = True
-    httpd = HTTPServer((host, PORT), _Handler)
+    from http.server import ThreadingHTTPServer
+    ThreadingHTTPServer.allow_reuse_address = True
+    ThreadingHTTPServer.daemon_threads = True   # keep WS threads from blocking shutdown
+    httpd = ThreadingHTTPServer((host, PORT), _Handler)
     httpd.serve_forever()
