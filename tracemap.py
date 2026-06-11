@@ -16,6 +16,15 @@ import alerts
 import server
 import agent
 
+_PRUNE_INTERVAL = 86400  # 24 hours
+
+
+def _prune_loop(days: int):
+    """Background thread: prune connection log every 24 hours."""
+    while True:
+        time.sleep(_PRUNE_INTERVAL)
+        db.prune_connection_log(days)
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -33,6 +42,8 @@ def main():
                         help="API key required in X-Agent-Key header (agent mode)")
     parser.add_argument("--hub",         metavar="PATH",
                         help="Hub mode: JSON file listing remote agents to poll")
+    parser.add_argument("--history-days", type=int, default=30,
+                        help="Delete connection log entries older than N days (0 = keep forever)")
     args = parser.parse_args()
 
     server.PORT = args.port
@@ -41,6 +52,10 @@ def main():
         db.set_db_path(args.db)
 
     db.init_db()
+
+    if args.history_days > 0:
+        db.prune_connection_log(args.history_days)
+        threading.Thread(target=_prune_loop, args=(args.history_days,), daemon=True).start()
 
     if args.alerts_file:
         alerts.load_rules_from_file(args.alerts_file)
