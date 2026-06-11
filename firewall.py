@@ -1,12 +1,16 @@
 """
-firewall.py — iptables-based IP blocking.
+firewall.py — iptables/ip6tables-based IP blocking.
 
-Requires root (os.geteuid()==0) and iptables on PATH.
+Requires root (os.geteuid()==0) and iptables (or ip6tables for IPv6) on PATH.
 All operations degrade gracefully when unavailable.
 
 Safety limits:
   - Private / loopback IPs are refused.
   - Hard rate limit: 10 block operations per 60 seconds.
+
+IPv6 support:
+  - _is_ipv6(ip) detects IPv6 addresses.
+  - block() / unblock() automatically use ip6tables for IPv6 addresses.
 """
 
 import ipaddress
@@ -34,6 +38,19 @@ def is_available() -> bool:
         return False
 
 
+def _is_ipv6(ip: str) -> bool:
+    """Return True if ip is an IPv6 address."""
+    try:
+        return isinstance(ipaddress.ip_address(ip), ipaddress.IPv6Address)
+    except ValueError:
+        return False
+
+
+def _ipt(ip: str) -> str:
+    """Return 'ip6tables' for IPv6 addresses, 'iptables' for IPv4."""
+    return "ip6tables" if _is_ipv6(ip) else "iptables"
+
+
 def _is_safe(ip: str) -> bool:
     try:
         addr = ipaddress.ip_address(ip)
@@ -50,7 +67,10 @@ def _rate_ok() -> bool:
 
 
 def block(ip: str) -> dict:
-    """Add OUTPUT DROP rule for ip. Returns {ok, error?}."""
+    """Add OUTPUT DROP rule for ip. Returns {ok, error?}.
+
+    Uses ip6tables automatically for IPv6 addresses.
+    """
     if not is_available():
         return {"ok": False, "error": "firewall unavailable (need root + iptables)"}
     if not _is_safe(ip):
@@ -61,7 +81,7 @@ def block(ip: str) -> dict:
         return {"ok": True, "note": "already blocked"}
     try:
         subprocess.run(
-            ["iptables", "-I", "OUTPUT", "-d", ip, "-j", "DROP"],
+            [_ipt(ip), "-I", "OUTPUT", "-d", ip, "-j", "DROP"],
             capture_output=True, check=True, timeout=5
         )
         db.add_blocked_ip(ip)
@@ -75,12 +95,15 @@ def block(ip: str) -> dict:
 
 
 def unblock(ip: str) -> dict:
-    """Remove OUTPUT DROP rule for ip. Returns {ok, error?}."""
+    """Remove OUTPUT DROP rule for ip. Returns {ok, error?}.
+
+    Uses ip6tables automatically for IPv6 addresses.
+    """
     if not is_available():
         return {"ok": False, "error": "firewall unavailable"}
     try:
         subprocess.run(
-            ["iptables", "-D", "OUTPUT", "-d", ip, "-j", "DROP"],
+            [_ipt(ip), "-D", "OUTPUT", "-d", ip, "-j", "DROP"],
             capture_output=True, check=True, timeout=5
         )
         db.remove_blocked_ip(ip)

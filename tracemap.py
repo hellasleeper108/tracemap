@@ -10,6 +10,7 @@ import time
 import webbrowser
 import db
 import collector
+import geo
 import threat
 import reputation
 import alerts
@@ -33,6 +34,10 @@ def main():
                         help="API key required in X-Agent-Key header (agent mode)")
     parser.add_argument("--hub",         metavar="PATH",
                         help="Hub mode: JSON file listing remote agents to poll")
+    parser.add_argument("--geoip-db",   metavar="PATH",
+                        help="Path to GeoLite2-City.mmdb for offline geolocation")
+    parser.add_argument("--geoip-asn",  metavar="PATH",
+                        help="Path to GeoLite2-ASN.mmdb for offline ASN lookup")
     args = parser.parse_args()
 
     server.PORT = args.port
@@ -41,6 +46,11 @@ def main():
         db.set_db_path(args.db)
 
     db.init_db()
+
+    geo.set_geoip_paths(
+        getattr(args, "geoip_db",  None),
+        getattr(args, "geoip_asn", None),
+    )
 
     if args.alerts_file:
         alerts.load_rules_from_file(args.alerts_file)

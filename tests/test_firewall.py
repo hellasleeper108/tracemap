@@ -155,5 +155,72 @@ class TestFirewallRateLimit(unittest.TestCase):
         self.assertTrue(firewall._rate_ok())
 
 
+class TestFirewallIPv6(unittest.TestCase):
+    """Tests for IPv6 detection and ip6tables selection."""
+
+    def test_is_ipv6_with_ipv6_address(self):
+        self.assertTrue(firewall._is_ipv6("2001:db8::1"))
+
+    def test_is_ipv6_with_ipv4_address(self):
+        self.assertFalse(firewall._is_ipv6("8.8.8.8"))
+
+    def test_is_ipv6_with_invalid_string(self):
+        self.assertFalse(firewall._is_ipv6("not-an-ip"))
+
+    def test_ipt_returns_ip6tables_for_ipv6(self):
+        self.assertEqual(firewall._ipt("2001:db8::1"), "ip6tables")
+
+    def test_ipt_returns_iptables_for_ipv4(self):
+        self.assertEqual(firewall._ipt("8.8.8.8"), "iptables")
+
+    def test_block_ipv6_uses_ip6tables(self):
+        """block() should call ip6tables for an IPv6 address."""
+        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        tmp.close()
+        with patch("db.DB_PATH", Path(tmp.name)):
+            db.init_db()
+            firewall._block_times.clear()
+            mock_run = MagicMock()
+            mock_run.returncode = 0
+            with patch("firewall.is_available", return_value=True), \
+                 patch("subprocess.run", return_value=mock_run) as mock_sub:
+                result = firewall.block("2001:4860:4860::8888")
+            # Check ip6tables was used
+            call_args = mock_sub.call_args[0][0]
+            self.assertEqual(call_args[0], "ip6tables")
+            self.assertTrue(result["ok"])
+        os.unlink(tmp.name)
+        firewall._block_times.clear()
+
+    def test_block_ipv4_uses_iptables(self):
+        """block() should call iptables for an IPv4 address."""
+        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        tmp.close()
+        with patch("db.DB_PATH", Path(tmp.name)):
+            db.init_db()
+            firewall._block_times.clear()
+            mock_run = MagicMock()
+            mock_run.returncode = 0
+            with patch("firewall.is_available", return_value=True), \
+                 patch("subprocess.run", return_value=mock_run) as mock_sub:
+                result = firewall.block("8.8.8.8")
+            call_args = mock_sub.call_args[0][0]
+            self.assertEqual(call_args[0], "iptables")
+            self.assertTrue(result["ok"])
+        os.unlink(tmp.name)
+        firewall._block_times.clear()
+
+    def test_unblock_ipv6_uses_ip6tables(self):
+        """unblock() should call ip6tables for an IPv6 address."""
+        mock_run = MagicMock()
+        mock_run.returncode = 0
+        with patch("firewall.is_available", return_value=True), \
+             patch("subprocess.run", return_value=mock_run) as mock_sub, \
+             patch("db.remove_blocked_ip"):
+            firewall.unblock("2001:4860:4860::8888")
+        call_args = mock_sub.call_args[0][0]
+        self.assertEqual(call_args[0], "ip6tables")
+
+
 if __name__ == "__main__":
     unittest.main()
