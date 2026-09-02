@@ -110,6 +110,9 @@ def _fetch_batch(ips: list[str]) -> dict[str, dict]:
     except urllib.error.URLError as e:
         print(f"[geo] batch fetch failed: {e}")
         return {}
+    except (json.JSONDecodeError, ValueError) as e:
+        print(f"[geo] batch parse failed: {e}")
+        return {}
 
 
 def geolocate(ips: list[str]) -> dict[str, dict]:
@@ -143,10 +146,12 @@ def geolocate(ips: list[str]) -> dict[str, dict]:
                 still_needed.append(ip)
 
         if still_needed:
-            fetched = _fetch_batch(still_needed)
-            for ip, data in fetched.items():
-                db.set_geo(ip, data)
-                result[ip] = data
+            for i in range(0, len(still_needed), 100):
+                chunk = still_needed[i:i+100]
+                fetched = _fetch_batch(chunk)
+                for ip, data in fetched.items():
+                    db.set_geo(ip, data)
+                    result[ip] = data
 
     return result
 
