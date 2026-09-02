@@ -38,37 +38,37 @@ def start_capture(ip: str, duration: int = 10) -> dict:
     if not is_available():
         return {"file": None, "status": "unavailable"}
 
-    with _lock:
-        if ip in _active and _active[ip].poll() is None:
-            return {"file": None, "status": "already_running"}
-
     PCAP_DIR.mkdir(parents=True, exist_ok=True)
     ts       = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
     filename = f"{ip.replace(':', '_')}_{ts}.pcap"
     filepath = PCAP_DIR / filename
 
-    cmd = [
-        "tcpdump", "-i", "any", "-w", str(filepath),
-        f"host {ip}",
-        "-G", str(duration), "-W", "1",
-    ]
-    try:
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-    except OSError:
-        return {"file": None, "status": "unavailable"}
+    # Use -c 0 (no packet count limit) and terminate via _reap after duration.
+    # Avoid -G/-W: those append a rotation counter (.pcap.0) that breaks our glob.
+    cmd = ["tcpdump", "-i", "any", "-w", str(filepath), f"host {ip}"]
 
     with _lock:
+        if ip in _active and _active[ip].poll() is None:
+            return {"file": None, "status": "already_running"}
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except OSError:
+            return {"file": None, "status": "unavailable"}
         _active[ip] = proc
 
     def _reap():
         try:
-            proc.wait(timeout=duration + 5)
+            proc.wait(timeout=duration)
         except subprocess.TimeoutExpired:
-            proc.kill()
+            proc.terminate()
+            try:
+                proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                proc.kill()
         with _lock:
             _active.pop(ip, None)
 

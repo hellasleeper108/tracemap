@@ -18,7 +18,7 @@ import subprocess
 import struct
 
 
-# ── helpers ────────────────────────────────────────────────────────────────────
+# ── helpers ──────────────────────────────────────────────────────────────────────────────
 
 def _hex_to_ip4(h: str) -> str:
     """Convert a little-endian hex quad to dotted-decimal (IPv4)."""
@@ -30,7 +30,7 @@ def _hex_to_ip6(h: str) -> str:
     """Convert a /proc/net/tcp6-style 32-hex-char string to compressed IPv6."""
     # Each 4-byte word is stored little-endian in /proc/net/tcp6
     words = [h[i:i+8] for i in range(0, 32, 8)]
-    packed = b"".join(struct.pack(">I", int(w, 16)) for w in words)
+    packed = b"".join(struct.pack(">I", struct.unpack("<I", bytes.fromhex(w))[0]) for w in words)
     return str(ipaddress.IPv6Address(packed))
 
 
@@ -123,7 +123,7 @@ def _ss_tls_info(ip: str, port: int) -> dict:
     return result
 
 
-# ── public API ─────────────────────────────────────────────────────────────────
+# ── public API ──────────────────────────────────────────────────────────────────────────────
 
 def get_tls_info(ip: str, port: str = "443") -> dict:
     """
@@ -143,7 +143,10 @@ def get_tls_info(ip: str, port: str = "443") -> dict:
       connected   : bool  (whether an ESTABLISHED entry was found in /proc)
       note        : str   (present when detail extraction is not possible)
     """
-    port_int = int(port)
+    try:
+        port_int = int(port)
+    except (ValueError, TypeError):
+        return {"ip": ip, "port": None, "tls": False, "note": "invalid port"}
     info: dict = {"ip": ip, "port": port_int, "tls": port_int == 443}
 
     # 1. Confirm connection exists via /proc/net/tcp*

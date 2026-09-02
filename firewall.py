@@ -16,12 +16,14 @@ IPv6 support:
 import ipaddress
 import os
 import subprocess
+import threading
 import time
 import db
 
 _RATE_WINDOW = 60    # seconds
 _RATE_LIMIT  = 10    # max block calls per window
 _block_times: list[float] = []
+_rate_lock = threading.Lock()
 
 
 def is_available() -> bool:
@@ -75,23 +77,24 @@ def block(ip: str) -> dict:
         return {"ok": False, "error": "firewall unavailable (need root + iptables)"}
     if not _is_safe(ip):
         return {"ok": False, "error": "cannot block private/loopback addresses"}
-    if not _rate_ok():
-        return {"ok": False, "error": f"rate limit: max {_RATE_LIMIT} blocks per minute"}
-    if db.is_blocked_ip(ip):
-        return {"ok": True, "note": "already blocked"}
-    try:
-        subprocess.run(
-            [_ipt(ip), "-I", "OUTPUT", "-d", ip, "-j", "DROP"],
-            capture_output=True, check=True, timeout=5
-        )
-        db.add_blocked_ip(ip)
-        _block_times.append(time.time())
-        print(f"[firewall] Blocked {ip}")
-        return {"ok": True}
-    except subprocess.CalledProcessError as e:
-        return {"ok": False, "error": e.stderr.decode().strip()}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
+    with _rate_lock:
+        if not _rate_ok():
+            return {"ok": False, "error": f"rate limit: max {_RATE_LIMIT} blocks per minute"}
+        if db.is_blocked_ip(ip):
+            return {"ok": True, "note": "already blocked"}
+        try:
+            subprocess.run(
+                [_ipt(ip), "-I", "OUTPUT", "-d", ip, "-j", "DROP"],
+                capture_output=True, check=True, timeout=5
+            )
+            db.add_blocked_ip(ip)
+            _block_times.append(time.time())
+            print(f"[firewall] Blocked {ip}")
+            return {"ok": True}
+        except subprocess.CalledProcessError as e:
+            return {"ok": False, "error": e.stderr.decode().strip()}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
 
 
 def unblock(ip: str) -> dict:
