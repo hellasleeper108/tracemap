@@ -22,6 +22,7 @@ import firewall
 import agent
 import traceroute as tr
 import tls_fingerprint
+import pcap
 
 # RFC 6455 WebSocket GUID
 _WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
@@ -257,6 +258,24 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._error(400, "missing ip")
             self._json(tls_fingerprint.get_tls_info(ip, "443"))
 
+        elif path.startswith("/api/pcap/download/"):
+            filename = path.removeprefix("/api/pcap/download/")
+            fpath = pcap.get_capture_path(filename)
+            if fpath is None:
+                return self._error(404, "not found")
+            self._serve_file(fpath, "application/vnd.tcpdump.pcap")
+
+        elif path.startswith("/api/pcap/"):
+            ip = path.removeprefix("/api/pcap/")
+            if not ip:
+                return self._error(400, "missing ip")
+            self._json({
+                "ip":       ip,
+                "status":   pcap.status(ip),
+                "captures": pcap.list_captures(ip),
+                "available": pcap.is_available(),
+            })
+
         else:
             self._error(404, "not found")
 
@@ -316,6 +335,19 @@ class _Handler(BaseHTTPRequestHandler):
             body = self._read_json_body()
             db.set_note(ip, body.get("note", ""))
             self._json({"ok": True})
+
+        elif path.startswith("/api/pcap/"):
+            ip = path.removeprefix("/api/pcap/")
+            if not ip:
+                return self._error(400, "missing ip")
+            duration = 10
+            try:
+                _, qs = self._parse_path()
+                duration = int((qs.get("duration") or ["10"])[0])
+                duration = max(1, min(duration, 120))
+            except (ValueError, TypeError):
+                pass
+            self._json(pcap.start_capture(ip, duration))
 
         elif path.startswith("/api/block/"):
             ip = path.removeprefix("/api/block/")
