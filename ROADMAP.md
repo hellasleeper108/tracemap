@@ -39,17 +39,19 @@
 
 ---
 
-## Phase 5 — Planned Features
+## ✓ Phase 5 — Advanced Features (v0.5)
 
-| Feature | Description | Effort |
-|---------|-------------|--------|
-| **PCAP Capture** | Capture raw packets per connection using `tcpdump`/`libpcap`; download `.pcap` files from the UI | High |
-| **IPv6 Visualisation** | Full IPv6 support in arc rendering, geo lookup, and firewall rules | Medium |
-| **REST API Key Auth** | Optional Bearer-token authentication for all API endpoints (not just agent mode) | Low |
-| **WebSocket Push** | Replace 5-second polling with a WebSocket feed; sub-second UI updates | Medium |
-| **Geo Heatmap Overlay** | Density heatmap layer showing connection frequency by country/region | Medium |
-| **Connection Graph / Topology View** | Force-directed graph showing host ↔ IP ↔ process relationships | High |
-| **Prometheus `/metrics` Endpoint** | Expose connection counts, threat scores, bandwidth, and alert rates as Prometheus metrics | Low |
-| **TLS Fingerprinting** | Extract JA3/JA3S fingerprints from TLS handshakes to identify client/server software | High |
-| **Offline MaxMind GeoLite2** | Support `--geoip-db` / `--geoip-asn` for air-gapped deployments using MaxMind `.mmdb` files | Medium |
-| **History Retention Config** | `--history-days` flag to prune old connection logs; hourly aggregation to reduce DB size | Low |
+- **PCAP Capture** — `tcpdump`-based per-IP packet capture; download `.pcap` files from the UI via `/api/pcap/{ip}`
+- **IPv6 Support** — Full IPv6 in geo lookup, firewall (`ip6tables`), and arc rendering
+- **REST API Key Auth** — Optional Bearer-token (`--api-key`) on all endpoints; `/metrics` exempt for Prometheus scrapers
+- **WebSocket Push** — `/ws/connections` feed replacing 5-second polling; falls back to polling automatically
+- **Geo Heatmap Overlay** — Density heatmap layer toggled from the map toolbar
+- **Connection Graph / Topology View** — Force-directed SVG graph showing host ↔ process ↔ IP relationships
+- **Prometheus `/metrics` Endpoint** — Connection counts, threat scores, bandwidth, alert rates as Prometheus metrics
+- **TLS Fingerprinting** — `/api/tls/{ip}` extracts TLS version, cipher, RTT from `/proc/net/tcp*` and `ss`; no root required
+- **Offline MaxMind GeoLite2** — `--geoip-db` / `--geoip-asn` flags for air-gapped `.mmdb` lookups
+- **History Retention Config** — `--history-days` flag prunes old logs; background pruning thread runs hourly
+
+---
+
+## Status: v0.5 — Project complete
